@@ -2,7 +2,7 @@
 # 10 sources; weights sum to 1.0; target total = 30B tokens.
 sources:
   - { id: fineweb_edu_q3, weight: 0.50 }   # FineWeb-Edu with quality score >= 3
-  - { id: fineweb,         weight: 0.12 }
+  - { id: fineweb,         weight: 0.14 }
   - { id: stack_python,    weight: 0.10 }
   - { id: stack_java,      weight: 0.03 }
   - { id: stack_cpp,       weight: 0.02 }
@@ -10,7 +10,7 @@ sources:
   - { id: dclm_baseline,   weight: 0.05 }   # NEW in v1.0
   - { id: dolma_wiki,      weight: 0.04 }   # multilingual Wikipedia
   - { id: dolma_books,     weight: 0.03 }
-  - { id: cosmopedia,      weight: 0.03 }   # NEW in v1.0 (synthetic textbook-style)
+  - { id: cosmopedia,      weight: 0.01 }   # NEW in v1.0 (synthetic textbook-style)
 
 train_fraction: 0.97
 val_fraction: 0.015

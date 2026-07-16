@@ -42,6 +42,7 @@ __all__ = [
     "DataError",
     "TokenizerError",
     "PathsError",
+    "AblationConfigError",
     "NotImplementedError_",
 ]
 
@@ -103,6 +104,10 @@ class PathsError(HyMoError):
     Raised by :class:`hymo.utils.paths.ProjectPaths` when a directory
     cannot be created (e.g. permission denied, missing parent).
     """
+
+
+class AblationConfigError(HyMoError):
+    """Unknown or invalid ablation configuration."""
 
 
 class NotImplementedError_(HyMoError, NotImplementedError):

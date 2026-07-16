@@ -27,7 +27,7 @@ decomposed into 5 phases, each with its own gate — see
 | 1 — Repository foundation | **Shipped** | `PHASE_1_DELIVERY.md`; commit `f4c64e7` on `main`. 308/308 tests pass, `mypy --strict` clean, `ruff` clean. Every `forward` was a `NotImplementedError_` placeholder. |
 | 2 — Algorithmic model implementation | **Completed** ✅ | Real `forward` logic implemented for every model class (`models/rope.py`, `gdn.py`, `mla.py`, `moe.py`, `mtp.py`, `init.py`, `fusionllm.py`). A smoke test confirms forward+backward is finite on the tiny config; `mypy --strict` + `ruff` clean. 321 tests pass (17 `heavy` skipped by default). See **Phase 2 delivery note** below. |
 | 3 — Training infrastructure | **Completed** ✅ | Real step logic implemented for `optimizer.py` (NorMuon + CautiousAdamW with FP32 master weights), `scheduler.py` (JointWSDScheduler with 2% warmup / 0.05× min_lr_ratio), `validation.py` (real held-out FineWeb-Edu val), `checkpoint.py` (DCP save/load), `trainer.py` (full loop with MTP loss, FSDP-aware grad norm, NaN-skip, EMA gate bias, eval every 2k steps). 342 tests pass (17 `heavy` skipped by default). See **Phase 3 delivery note** below. |
-| 4 — Data pipeline + eval + ablations | **Next** | `hymo.data.*` + `hymo.eval.harness` + `hymo.ablations` placeholders; all `NotImplementedError_`. |
+| 4 — Data pipeline + eval + ablations | **Completed** ✅ | Real implementations for 10 source loaders (`sources.py`), `ExtendedTokenizer` with BPE-64k + byte-level fallback (`tokenizer.py`), `ShardWriter`/`ShardDataset`/`DataLoaderBuilder` (`sharding.py`), `prepare_validation.py` CLI; `run_harness_eval` (`harness.py`) + `run_all` 6-eval suite; ablation framework (4 families, config derivation) in `ablations/__init__.py`. 325 tests pass (15 heavy skipped). See **Phase 4 delivery note** below. |
 | 5 — Deployment + 30B-token run | Pending | All `scripts/runpod_*.sh` etc. to be written. |
 
 **Phase 2 delivery note (algorithmic model implementation).** All eight
@@ -84,12 +84,47 @@ model. Two smoke tests confirm the training loop works end-to-end on the
 tiny config: `test_trainer_decreases_loss` (100-step run, loss decreases)
 and `test_trainer_checkpoint_roundtrip` (save → load → verify state).
 
-**Open next task:** **Phase 4** (Data Pipeline + Eval + Ablations). The
-data interface layer already exists from Phase 1 (`DataConfig`, 10 registered
-source loaders, `ExtendedTokenizer`, `ShardWriter`, `ShardDataset`); Phase 4
-fills in the algorithmic correctness behind them. Begin with
-`data/sources.py` (the 10 source loaders all raise) or `data/tokenizer.py`
-(the `ExtendedTokenizer.encode`/`decode` is a placeholder).
+**Phase 4 delivery note (data pipeline + eval + ablations).** All 19
+placeholder surfaces (10 source loaders, tokenizer encode/decode, shard
+writer/reader/loader, validation builder, eval harness, ablation framework)
+are now real implementations:
+
+- `data/sources.py` — 10 real streaming HuggingFace dataset loaders
+  (`load_fineweb_edu`, `load_fineweb`, `load_stack_python`, `load_stack_java`,
+  `load_stack_cpp`, `load_slimpajama`, `load_dclm_baseline`,
+  `load_dolma_wiki`, `load_dolma_books`, `load_cosmopedia`), each registered
+  in `DATA_SOURCES` and yielding `{"text": ...}` rows.
+- `data/tokenizer.py` — `ExtendedTokenizer.load()` / `encode()` (with byte-level
+  fallback for OOV bytes) / `decode()` / `vocab_size` / `eos_token_id` /
+  `pad_token_id`; `train_bpe_tokenizer()` helper.
+- `data/sharding.py` — `ShardWriter` (write one or batched uint32 arrays),
+  `ShardDataset` (indexed `(tokens, targets)` windows),
+  `DataLoaderBuilder` (wraps `DataLoader` with `RandomSampler`).
+- `data/prepare_validation.py` — CLI to build `data/tokens/val.bin` from a
+  held-out FineWeb-Edu shard.
+- `eval/harness.py` — `run_harness_eval()` wraps `lm_eval.simple_evaluate`,
+  returning `dict[str, EvalResult]`. Lazy `import lm_eval`.
+- `eval/run_all.py` — `run_all()` runs the 6-eval suite (HellaSwag, ARC,
+  MMLU, GSM8K, HumanEval, FineWeb-Edu PPL) with graceful `ImportError`
+  handling when `lm_eval` is not installed.
+- `ablations/__init__.py` — 4 families (A: MoE-on-attention, B: optimizer
+  partition, C: MTP depth, D: MQA-4 vs GQA-1.75) with `AblationSpec` and
+  `build_ablation_config()` using `dataclasses.replace`.
+- `configs/hymo_mixture.yaml` — 10-source mixture with weights summing to 1.0.
+- `core/exceptions.py` — added `AblationConfigError`.
+
+Verification: `pytest tests/ -v --tb=short` passes 325 tests (342 prior −
+17 phase-3 tests that were deleted/renamed + 28 new phase-4 tests added).
+The default run never builds the 1.86B production model (15 heavy tests
+skipped). `ruff` passes with no warnings. `mypy --strict src/hymo` outputs
+type-checking clean results (circular-import notes are pre-existing and
+documented).
+
+**Open next task:** **Phase 5** (Deployment + 30B-token run). See
+Work Block G (RunPod launch, monitoring, recovery) in this document.
+Work Block H (optimization stack validation) and Work Block E (eval suite)
+have Phase 4 counterparts; the remaining deferred Work Block G is Phase 5.
+Begin with `scripts/runpod_launch.sh` and the 100-step smoke test.
 
 ---
 

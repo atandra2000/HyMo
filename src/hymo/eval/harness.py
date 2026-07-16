@@ -1,19 +1,14 @@
-"""lm-evaluation-harness wrapper (Phase 1 placeholder).
+"""lm-evaluation-harness wrapper (Phase 4 implementation).
 
-The real implementation (architecture doc §15, roadmap E1) is a thin
-wrapper around :mod:`lm_eval`. It uses
-``lm_eval.models.huggingface.HFLM`` to wrap a HyMo model and runs the
-6-eval suite.
-
-This placeholder defines the public surface; the body raises
-:class:`NotImplementedError_`.
+Architecture doc §15, roadmap E1. Thin wrapper around ``lm_eval``
+using ``lm_eval.models.huggingface.HFLM`` to wrap a HyMo model.
 """
 
 from __future__ import annotations
 
 from typing import Any
 
-from hymo.core.exceptions import NotImplementedError_
+from hymo.eval.baselines import TASK_TO_METRIC
 
 __all__ = ["run_harness_eval", "EvalResult"]
 
@@ -64,10 +59,49 @@ def run_harness_eval(
 ) -> dict[str, EvalResult]:
     """Run lm-evaluation-harness on the given tasks.
 
-    Phase 1 placeholder — raises :class:`NotImplementedError_`. The
-    real implementation lands in Phase 4 (design §15, roadmap E1).
+    Parameters
+    ----------
+    model : nn.Module
+        The HyMo model instance.
+    tokenizer : ExtendedTokenizer
+        The tokenizer (used for encoding/decoding).
+    tasks : list of str
+        Task names understood by lm-eval (e.g. ``["hellaswag"]``).
+    num_fewshot : int
+        Number of few-shot examples (default 0).
+    batch_size : int
+        Batch size for evaluation.
+
+    Returns
+    -------
+    dict[str, EvalResult]
+        Mapping from task name to :class:`EvalResult`.
     """
-    raise NotImplementedError_(
-        "run_harness_eval is a Phase 1 placeholder; the real "
-        "implementation lands in Phase 4 (design §15, roadmap E1)."
+    import lm_eval
+    from lm_eval.models.huggingface import HFLM
+
+    lm = HFLM(
+        pretrained=model,
+        tokenizer=tokenizer,
+        batch_size=batch_size,
+        device=next(model.parameters()).device,
     )
+    results = lm_eval.simple_evaluate(
+        model=lm,
+        tasks=tasks,
+        num_fewshot=num_fewshot,
+        batch_size=batch_size,
+    )
+    task_results: dict[str, EvalResult] = {}
+    for task in tasks:
+        task_data = results["results"].get(task, {})
+        metric_key = TASK_TO_METRIC.get(task, next(iter(task_data)))
+        value = task_data.get(metric_key, float("nan"))
+        stderr = task_data.get(f"{metric_key}_stderr", None)
+        task_results[task] = EvalResult(
+            task=task,
+            metric=metric_key,
+            value=float(value) if isinstance(value, (int, float)) else float("nan"),
+            stderr=float(stderr) if stderr is not None else None,
+        )
+    return task_results

@@ -7,7 +7,8 @@ A 750M-active hybrid language model combining **Gated Delta Net** (linear attent
 - **Phase 1 (Repository Foundation):** ✅ Shipped — 47 Python files, full public API, frozen config, all interfaces. See [docs/PHASE_1_DELIVERY.md](docs/PHASE_1_DELIVERY.md).
 - **Phase 2 (Algorithmic Model Implementation):** ✅ Completed — every `forward` in `hymo.models` is real (GDN, MLA, MoE, MTP, RoPE, μP init, 32-layer HyMo stack). See [Phase 2 delivery note](docs/HyMo-Roadmap.md#user-content-phase-2-delivery-note-algorithmic-model-implementation).
 - **Phase 3 (Training Infrastructure):** ✅ Completed — `NorMuon`/`CautiousAdamW` with FP32 master weights, `JointWSDScheduler`, real held-out validation, DCP checkpoint save/load, `Trainer` with MTP loss, FSDP-aware grad norm, NaN-skip, EMA gate bias, eval every 2k steps. See [Phase 3 delivery note](docs/HyMo-Roadmap.md#phase-3-delivery-note-training-infrastructure).
-- **Phase 4+ (Data pipeline, eval, deployment):** Pending — see [docs/HyMo-Roadmap.md](docs/HyMo-Roadmap.md).
+- **Phase 4 (Data pipeline, eval, ablations):** ✅ Completed — 10 real source loaders, BPE-64k + byte-level tokenizer, shard writer/reader, 6-eval harness, ablation framework (4 families). See [Phase 4 delivery note](docs/HyMo-Roadmap.md#phase-4-delivery-note-data-pipeline--eval--ablations).
+- **Phase 5 (Deployment, 30B run):** Pending — see [docs/HyMo-Roadmap.md](docs/HyMo-Roadmap.md).
 
 ## Layout
 

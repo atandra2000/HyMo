@@ -1,14 +1,17 @@
-"""Tests for the :mod:`hymo.data.config` and data placeholders."""
+"""Tests for the :mod:`hymo.data` module (Phase 4)."""
 
 from __future__ import annotations
 
 from pathlib import Path
 
+import numpy as np
 import pytest
+import torch
 
 from hymo.core.exceptions import (
     ConfigNotFoundError,
     ConfigValidationError,
+    TokenizerError,
 )
 from hymo.data import (
     BYTE_VOCAB_SIZE,
@@ -47,13 +50,13 @@ class TestSourceSpec:
         with pytest.raises(ConfigValidationError):
             SourceSpec(id="x", weight=-0.1)
         with pytest.raises(ConfigValidationError):
-            SourceSpec(id="x", weight=1.5)  # > 1.0
+            SourceSpec(id="x", weight=1.5)
 
 
 class TestDataConfig:
     def test_default_construct(self) -> None:
         with pytest.raises(ConfigValidationError):
-            DataConfig()  # needs at least one source
+            DataConfig()
 
     def test_single_source(self) -> None:
         c = DataConfig(sources=(SourceSpec(id="x", weight=1.0),))
@@ -89,7 +92,6 @@ class TestDataConfig:
             )
 
     def test_fractions_must_sum_to_one(self) -> None:
-        # 0.5 + 0.3 + 0.0 = 0.8, not 1.0 — must raise.
         with pytest.raises(ConfigValidationError):
             DataConfig(
                 sources=(SourceSpec(id="a", weight=1.0),),
@@ -196,19 +198,10 @@ class TestExtendedTokenizer:
         assert t.eos_token_id == 0
         assert t.pad_token_id == 2
 
-    def test_load_raises(self, tmp_path: Path) -> None:
-        t = ExtendedTokenizer(tmp_path / "tok.json")
-        from hymo.core.exceptions import NotImplementedError_
-
-        with pytest.raises(NotImplementedError_):
+    def test_load_missing_file_raises(self, tmp_path: Path) -> None:
+        t = ExtendedTokenizer(tmp_path / "does_not_exist.json")
+        with pytest.raises(TokenizerError):
             t.load()
-
-    def test_encode_raises(self, tmp_path: Path) -> None:
-        t = ExtendedTokenizer(tmp_path / "tok.json")
-        from hymo.core.exceptions import NotImplementedError_
-
-        with pytest.raises(NotImplementedError_):
-            t.encode("hello world")
 
     def test_registered(self) -> None:
         assert TOKENIZERS.has("hymo-bpe-64k")
@@ -220,42 +213,57 @@ class TestShardWriter:
         assert w.output_dir == tmp_path
         assert w.shard_size_tokens == 1024
 
-    def test_write_shard_raises(self, tmp_path: Path) -> None:
-        import numpy as np
+    def test_write_and_read_shard(self, tmp_path: Path) -> None:
+        w = ShardWriter(output_dir=tmp_path, shard_size_tokens=100)
+        tokens = np.arange(100, dtype=np.uint32)
+        path = w.write_shard(0, tokens)
+        assert path.exists()
+        assert path.name == "shard_00000.bin"
+        loaded = np.fromfile(path, dtype=np.uint32)
+        np.testing.assert_array_equal(loaded, tokens)
 
-        w = ShardWriter(output_dir=tmp_path, shard_size_tokens=1024)
-        from hymo.core.exceptions import NotImplementedError_
-
-        with pytest.raises(NotImplementedError_):
-            w.write_shard(0, np.zeros(100, dtype=np.uint32))
+    def test_write_batched(self, tmp_path: Path) -> None:
+        w = ShardWriter(output_dir=tmp_path, shard_size_tokens=50)
+        tokens = np.arange(120, dtype=np.uint32)
+        paths = w.write_batched(tokens)
+        assert len(paths) == 3
+        assert all(p.exists() for p in paths)
+        total = sum(np.fromfile(p, dtype=np.uint32).size for p in paths)
+        assert total == 150  # 120 + 30 pad
 
 
 class TestShardDataset:
-    def test_construct(self, tmp_path: Path) -> None:
+    def test_empty_dir(self, tmp_path: Path) -> None:
         d = ShardDataset(tmp_path, max_seq_len=64)
-        assert d.shards_dir == tmp_path
-        assert d.max_seq_len == 64
+        assert len(d) == 0
 
-    def test_len_raises(self, tmp_path: Path) -> None:
-        d = ShardDataset(tmp_path, max_seq_len=64)
-        from hymo.core.exceptions import NotImplementedError_
-
-        with pytest.raises(NotImplementedError_):
-            len(d)
+    def test_with_shards(self, tmp_path: Path) -> None:
+        w = ShardWriter(output_dir=tmp_path, shard_size_tokens=200)
+        w.write_shard(0, np.arange(200, dtype=np.uint32))
+        d = ShardDataset(tmp_path, max_seq_len=8)
+        assert len(d) > 0
+        tokens, targets = d[0]
+        assert tokens.shape == (8,)
+        assert targets.shape == (8,)
+        # tokens[1:] should equal targets[:-1]
+        assert torch.equal(tokens[1:], targets[:-1])
 
 
 class TestDataLoaderBuilder:
     def test_construct(self, tmp_path: Path) -> None:
-        d = ShardDataset(tmp_path, max_seq_len=64)
+        w = ShardWriter(output_dir=tmp_path, shard_size_tokens=200)
+        w.write_shard(0, np.arange(200, dtype=np.uint32))
+        d = ShardDataset(tmp_path, max_seq_len=8)
         from hymo.core.config import TrainingConfig
 
         b = DataLoaderBuilder(d, TrainingConfig())
-        assert b.dataset is d
+        loader = b.build()
+        batch = next(iter(loader))
+        assert len(batch) == 2  # tokens, targets
+        assert batch[0].shape[0] == TrainingConfig().micro_batch_size
 
 
 class TestDataSourcesRegistered:
-    """All 10 sources should be registered on import."""
-
     def test_10_sources(self) -> None:
         ids = {
             "fineweb_edu_q3",

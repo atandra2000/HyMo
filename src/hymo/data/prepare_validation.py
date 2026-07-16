@@ -7,17 +7,17 @@ Produces ``data/tokens/val.bin`` from a 5% held-out split of FineWeb-Edu
 from __future__ import annotations
 
 import argparse
+import typing
 from pathlib import Path
 
 import numpy as np
 
 from hymo.data.tokenizer import ExtendedTokenizer
 
-
 try:
     from tqdm import tqdm
 except ImportError:
-    def tqdm(iterable, **kwargs):
+    def tqdm(iterable: typing.Any, **kwargs: typing.Any) -> typing.Any:
         return iterable
 
 

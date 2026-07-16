@@ -1,4 +1,4 @@
-"""Tests for the :mod:`hymo.utils.checkpoint` module (atomic file write)."""
+"""Tests for the :mod:`hymo.utils.atomic_io` module (atomic file write)."""
 
 from __future__ import annotations
 
@@ -6,7 +6,7 @@ from pathlib import Path
 
 import pytest
 
-from hymo.utils.checkpoint import (
+from hymo.utils.atomic_io import (
     atomic_write_bytes,
     atomic_write_with,
 )

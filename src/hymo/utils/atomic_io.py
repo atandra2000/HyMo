@@ -1,4 +1,4 @@
-"""Atomic checkpoint write helper (low-level, model-agnostic).
+"""Atomic file-write helper (low-level, model-agnostic).
 
 The DCP-based checkpoint save/load lives in :mod:`hymo.training.checkpoint`
 (Phase 3). This module is the *low-level* atomic-write helper used by

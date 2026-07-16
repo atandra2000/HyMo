@@ -155,7 +155,7 @@ class DataLoaderBuilder:
         self.dataset = dataset
         self.config = config
 
-    def build(self) -> DataLoader:
+    def build(self) -> DataLoader[Any]:
         """Build a :class:`torch.utils.data.DataLoader`."""
         effective_batch = self.config.micro_batch_size
         sampler = torch.utils.data.RandomSampler(

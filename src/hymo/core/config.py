@@ -26,8 +26,8 @@ A single YAML file maps to :class:`HyMoConfig`, which has 5 sub-configs:
 - :class:`TrainingConfig` — batch size, grad accum, grad clip, ckpt.
 - :class:`RunConfig` — run identity (name, seed, output dir, etc.).
 
-The data pipeline uses a separate :class:`hymo.data.config.DataConfig`
-(see :mod:`hymo.data.config`).
+The data pipeline uses a separate :class:`hymo.data.data_config.DataConfig`
+(see :mod:`hymo.data.data_config`).
 """
 
 from __future__ import annotations

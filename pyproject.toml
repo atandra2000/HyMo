@@ -111,7 +111,7 @@ mypy_path = "src"
 
 [[tool.mypy.overrides]]
 # torch.* stubs are incomplete; loosen the rules there
-module = ["torch.*"]
+module = ["torch.*", "lm_eval.*", "datasets.*", "tokenizers.*", "fla.*", "tqdm.*"]
 ignore_missing_imports = true
 
 [tool.pytest.ini_options]

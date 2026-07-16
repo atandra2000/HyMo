@@ -74,7 +74,7 @@ def _byte_fallback_encode(
     encoding = base_tokenizer.encode(text)
     ids: list[int] = []
     tokens: list[str] = []
-    for token_id, token_str in zip(encoding.ids, encoding.tokens):
+    for token_id, token_str in zip(encoding.ids, encoding.tokens, strict=False):
         if token_id == base_tokenizer.token_to_id("<unk>"):
             for b in text.encode("utf-8"):
                 byte_token = _BYTE_TOKENS[b]
@@ -122,6 +122,7 @@ class ExtendedTokenizer:
         """Decode a list of token IDs back to text."""
         if self._base is None:
             self.load()
+        assert self._base is not None
         chunks: list[str] = []
         for token_id in ids:
             if token_id >= _BASE_VOCAB_SIZE:

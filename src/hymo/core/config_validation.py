@@ -1,4 +1,4 @@
-"""Runtime config validation (cross-field checks).
+"""Cross-field runtime config validation.
 
 The per-config ``__post_init__`` checks each field in isolation. This
 module contains the *cross-field* checks that need the full

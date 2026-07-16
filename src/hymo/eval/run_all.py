@@ -11,7 +11,6 @@ import json
 from pathlib import Path
 from typing import Any
 
-import torch
 from torch import nn
 
 from hymo.eval.harness import EvalResult, run_harness_eval
@@ -85,7 +84,7 @@ def run_all(
     """
     device = next(model.parameters()).device
     lm_eval_tasks: list[str] = []
-    for task, n_shot in EVAL_SUITE:
+    for task, _n_shot in EVAL_SUITE:
         if task != "fineweb_edu_ppl":
             lm_eval_tasks.append(task)
 
@@ -114,7 +113,7 @@ def run_all(
         val_bin_path=Path(val_bin_path),
     )
 
-    results: dict[str, dict[str, float]] = {}
+    results: dict[str, dict[str, Any]] = {}
     for task in lm_eval_tasks:
         er = harness_results.get(task)
         if er is not None:

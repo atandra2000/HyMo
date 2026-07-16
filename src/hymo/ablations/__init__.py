@@ -24,12 +24,10 @@ from pathlib import Path
 
 from hymo.core.config import (
     HyMoConfig,
-    ModelConfig,
-    OptimizerConfig,
-    RunConfig,
     SchedulerConfig,
 )
 from hymo.core.exceptions import AblationConfigError
+from hymo.core.types import Step
 
 __all__ = [
     "ABLATION_FAMILIES",
@@ -263,7 +261,7 @@ def build_ablation_config(
         cfg,
         run=dc_replace(cfg.run, output_dir=str(output)),
         scheduler=SchedulerConfig(
-            total_steps=int(7_500_000_000 / cfg.training.per_step_tokens),
+            total_steps=Step(int(7_500_000_000 / cfg.training.per_step_tokens)),
             warmup_frac=base.scheduler.warmup_frac,
             stable_frac=base.scheduler.stable_frac,
             decay_frac=base.scheduler.decay_frac,

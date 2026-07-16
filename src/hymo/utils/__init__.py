@@ -2,16 +2,16 @@
 
 from __future__ import annotations
 
+from hymo.utils.atomic_io import (
+    CheckpointIOError,
+    atomic_write_bytes,
+    atomic_write_with,
+)
 from hymo.utils.callbacks import (
     Callback,
     CallbackEvent,
     CallbackList,
     TrainerState,
-)
-from hymo.utils.checkpoint import (
-    CheckpointIOError,
-    atomic_write_bytes,
-    atomic_write_with,
 )
 from hymo.utils.logging import MetricsLogger, MetricsRecord, get_logger
 from hymo.utils.metrics import Metric, MetricCollection

@@ -28,7 +28,7 @@ from hymo.core.exceptions import (
     ConfigValidationError,
 )
 from hymo.core.types import Path as PathType
-from hymo.utils.checkpoint import atomic_write_with
+from hymo.utils.atomic_io import atomic_write_with
 
 __all__ = [
     "DataConfig",

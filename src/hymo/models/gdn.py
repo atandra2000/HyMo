@@ -242,7 +242,11 @@ class GatedDeltaNetBlock(nn.Module):
 
         # 5. Gated delta rule. The recurrence uses ``dt`` (per-head
         # gate) as the per-step decay modifier.
-        o = self._gated_delta_rule(v, b, c, dt)                    # (B, T, H, D)
+        try:
+            from fla.layers.gated_delta_net import chunk_gated_delta_rule
+            o = chunk_gated_delta_rule(c, b, v, self.A_log, dt, g, self.chunk_size)
+        except ImportError:
+            o = self._gated_delta_rule(v, b, c, dt)                    # (B, T, H, D)
 
         # 6. Per-head skip connection: o += D ⊙ v.
         o = o + self.D.view(1, 1, H, 1) * v

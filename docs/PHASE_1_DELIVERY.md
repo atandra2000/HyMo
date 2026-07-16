@@ -562,7 +562,7 @@ ablations, and FSDP-2).
 7. **Cross-field validation is separate from per-field.** Per-field
    `__post_init__` checks isolated values. Cross-field checks
    (`_validate_layer_distribution`, `_validate_vram_budget`) live in
-   `hymo.core.validation` and require the full `HyMoConfig`.
+   `hymo.core.config_validation` and require the full `HyMoConfig`.
 
 8. **The 4 §12a optimizations are config flags, not hardcoded.** The
    production YAML sets them to `true`; the test fixtures can flip them

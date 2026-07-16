@@ -8,7 +8,7 @@ state). Both MTP heads share the main model's head (no extra storage).
 
 from __future__ import annotations
 
-from typing import TYPE_CHECKING, cast
+from typing import TYPE_CHECKING, Any, cast
 
 import torch
 from torch import nn
@@ -100,7 +100,8 @@ class MultiTokenPrediction(nn.Module):
         fused = hidden + emb
         h = F.silu(block.w1(fused)) * block.w3(fused)  # (B, T, mtp_inter_dim)
         out = block.w2(h)                              # (B, T, dim)
-        logits = self._main_model.head(out)           # (B, T, vocab)
+        main = cast(Any, self._main_model)
+        logits = main.head(out)           # (B, T, vocab)
         return logits, out
 
     def forward(
@@ -129,10 +130,11 @@ class MultiTokenPrediction(nn.Module):
             ``depth`` of :class:`MTPOutput`.
         """
         B, T = tokens.shape
-        main_logits, main_hidden = self._main_model.forward_with_hidden(
+        main = cast(Any, self._main_model)
+        main_logits, main_hidden = main.forward_with_hidden(
             tokens, start_pos
         )
-        embed = self._main_model.embed  # weight-sharing lookup
+        embed = main.embed  # weight-sharing lookup
 
         outputs: list[MTPOutput] = []
         prev_hidden = main_hidden

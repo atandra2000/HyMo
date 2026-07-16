@@ -168,12 +168,13 @@ class DataLoaderBuilder:
                 * 100
             ),
         )
+        num_workers = min(4, self.config.world_size) if self.config.world_size > 1 else 0
         return DataLoader(
             self.dataset,
             batch_size=effective_batch,
             sampler=sampler,
-            num_workers=min(4, self.config.world_size),
+            num_workers=num_workers,
             pin_memory=True,
-            prefetch_factor=2,
+            prefetch_factor=2 if num_workers > 0 else None,
             drop_last=True,
         )

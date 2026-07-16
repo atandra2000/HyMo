@@ -26,11 +26,7 @@ from hymo.training import (
     partition_parameters,
 )
 from hymo.utils import (
-    Callback,
-    CallbackList,
     MetricsLogger,
-    ProjectPaths,
-    TrainerState,
 )
 
 
@@ -51,8 +47,6 @@ class TestPublicApi:
 
     def test_utils_classes_exported(self) -> None:
         assert MetricsLogger is not None
-        assert Callback is not None
-        assert ProjectPaths is not None
 
     def test_registry_exported(self) -> None:
         from hymo.registry import DATA_SOURCES, MODELS, TOKENIZERS
@@ -261,39 +255,6 @@ class TestDerivedConfig:
         )
         assert derived.model.mtp_depth == 0
         assert derived.model.mtp_loss_weights == ()
-
-
-class TestCallbackListWithTrainer:
-    """The CallbackList integrates with the trainer (Phase 1 surface)."""
-
-    def test_callback_runs_during_event_dispatch(self) -> None:
-        seen: list[str] = []
-
-        class C:
-            def on_train_begin(self, state: TrainerState) -> None:
-                seen.append("begin")
-            def on_step_end(self, state: TrainerState) -> None:
-                seen.append("step")
-
-        cl = CallbackList([C()])
-        cl.dispatch("on_train_begin", TrainerState())
-        cl.dispatch("on_step_end", TrainerState())
-        assert seen == ["begin", "step"]
-
-
-class TestProjectPathsFromConfig:
-    """Paths can be derived from a :class:`RunConfig`."""
-
-    def test_paths_from_production_config(self, production_config_only) -> None:
-        """The v1.0 RunConfig produces the canonical project paths.
-        No model build required."""
-        paths = ProjectPaths.from_config(production_config_only.run)
-        # ``output_dir`` is ``<root> / config.output_dir``; default root
-        # is the current working directory.
-        assert paths.output_dir == Path.cwd() / "checkpoints/pretrain"
-        assert paths.log_dir == Path.cwd() / "logs"
-        assert paths.eval_dir == Path.cwd() / "checkpoints/pretrain/eval"
-        assert paths.metrics_path == Path.cwd() / "logs" / "metrics.jsonl"
 
 
 class TestMetricsLoggerRoundTrip:

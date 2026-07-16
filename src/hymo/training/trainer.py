@@ -34,7 +34,6 @@ from hymo.training.validation import (
     ValMetrics,
     compute_validation_loss,
 )
-from hymo.utils.callbacks import CallbackEvent, CallbackList, TrainerState
 
 __all__ = ["Trainer", "TrainerConfig", "train_step_result"]
 
@@ -100,12 +99,9 @@ class Trainer:
         self,
         config: HyMoConfig,
         model: HyMo,
-        callbacks: CallbackList | None = None,
     ) -> None:
         self._config = config
         self.model = model
-
-        self.callbacks = callbacks if callbacks is not None else CallbackList()
 
         self.optimizers = build_optimizers(model, config.optimizer)
         self.scheduler = JointWSDScheduler(config.scheduler)
@@ -116,11 +112,10 @@ class Trainer:
         )
         self._base_lr_adamw: float = config.optimizer.adamw_lr
 
-        # Public state — the callbacks read this via the TrainerState.
+        # Public state.
         self.step: int = 0
         self.token_count: int = 0
         self.best_loss: float = float("inf")
-        self.state = TrainerState()
 
         if config.model.mtp_depth > 0:
             self._has_mtp = True
@@ -304,11 +299,6 @@ class Trainer:
         self.token_count = state.token_count
         self.best_loss = state.best_loss
 
-        self.callbacks.dispatch(
-            CallbackEvent.CHECKPOINT_LOAD,
-            self._make_state(),
-        )
-
         log.info("Checkpoint loaded from %s (step=%d)", p, self.step)
         return self.step
 
@@ -329,22 +319,11 @@ class Trainer:
         if max_steps is None:
             max_steps = self._config.scheduler.total_steps
 
-        self.callbacks.dispatch(CallbackEvent.TRAIN_BEGIN, self._make_state())
-
         for tokens, targets in data_iter:
             if self.step >= max_steps:
                 break
 
-            self.callbacks.dispatch(CallbackEvent.STEP_BEGIN, self._make_state())
-
             result = self.train_step(tokens, targets)
-
-            # Update shared state for callbacks.
-            self.state.loss = result.loss
-            self.state.grad_norm = result.grad_norm
-            self.state.lr_muon = result.lr_muon
-            self.state.lr_adamw = result.lr_adamw
-            self.state.metrics = result.metrics
 
             if (
                 self.step % self._config.training.log_interval == 0
@@ -361,30 +340,17 @@ class Trainer:
                 self._config.training.eval_interval > 0
                 and self.step % self._config.training.eval_interval == 0
             ):
-                self.callbacks.dispatch(CallbackEvent.EVAL_BEGIN, self._make_state())
                 eval_metrics = self.evaluate()
-                self.state.metrics.update(eval_metrics)
                 if eval_metrics.get("val_loss", float("inf")) < self.best_loss:
                     self.best_loss = eval_metrics["val_loss"]
                     self.save(tag="best")
-                self.callbacks.dispatch(CallbackEvent.EVAL_END, self._make_state())
 
             # Checkpoint save.
             if (
                 self._config.training.save_interval > 0
                 and self.step % self._config.training.save_interval == 0
             ):
-                self.callbacks.dispatch(
-                    CallbackEvent.CHECKPOINT_SAVE, self._make_state()
-                )
                 self.save()
-
-            self.callbacks.dispatch(CallbackEvent.STEP_END, self._make_state())
-
-            if self.state.stop_training:
-                break
-
-        self.callbacks.dispatch(CallbackEvent.TRAIN_END, self._make_state())
 
     def evaluate(self, val_bin_path: str | Path | None = None) -> dict[str, float]:
         """Run a single validation pass on the held-out ``val.bin``.
@@ -438,14 +404,3 @@ class Trainer:
             return float(self.optimizers.adamw.param_groups[0].get("lr", 0.0))
         return 0.0
 
-    def _make_state(self) -> TrainerState:
-        """Build a fresh :class:`TrainerState` for callback dispatch."""
-        return TrainerState(
-            step=self.step,
-            token_count=self.token_count,
-            loss=self.state.loss,
-            grad_norm=self.state.grad_norm,
-            lr_muon=self._current_lr_muon(),
-            lr_adamw=self._current_lr_adamw(),
-            metrics=dict(self.state.metrics),
-        )

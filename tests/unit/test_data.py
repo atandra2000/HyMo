@@ -256,7 +256,7 @@ class TestDataLoaderBuilder:
         d = ShardDataset(tmp_path, max_seq_len=8)
         from hymo.core.config import TrainingConfig
 
-        b = DataLoaderBuilder(d, TrainingConfig())
+        b = DataLoaderBuilder(d, TrainingConfig(world_size=1))
         loader = b.build()
         batch = next(iter(loader))
         assert len(batch) == 2  # tokens, targets

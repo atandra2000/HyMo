@@ -31,7 +31,7 @@ import hymo
 from hymo.core import HyMoConfig, ModelConfig, validate_full_config
 from hymo.models import HyMo, build_hymo
 from hymo.training import build_optimizers, partition_parameters
-from hymo.utils import MetricsLogger, ProjectPaths
+from hymo.utils import MetricsLogger
 from hymo.eval import format_comparison_table, BASELINES
 
 c = HyMoConfig()

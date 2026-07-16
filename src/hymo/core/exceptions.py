@@ -101,8 +101,7 @@ class TokenizerError(HyMoError):
 class PathsError(HyMoError):
     """A filesystem / project-paths operation failed.
 
-    Raised by :class:`hymo.utils.paths.ProjectPaths` when a directory
-    cannot be created (e.g. permission denied, missing parent).
+    Raised when a directory cannot be created (e.g. permission denied).
     """
 
 

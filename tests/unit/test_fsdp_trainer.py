@@ -19,7 +19,6 @@ from hymo.training import (
     train_step_result,
     wrap_model_with_fsdp,
 )
-from hymo.utils.callbacks import CallbackList
 
 # ---------------------------------------------------------------------------
 # Helper: create a small val.bin for trainer.evaluate tests
@@ -79,15 +78,8 @@ class TestTrainer:
         assert trainer.step == 0
         assert trainer.token_count == 0
         assert trainer.best_loss == float("inf")
-        assert isinstance(trainer.callbacks, CallbackList)
         assert trainer.optimizers is not None
         assert trainer.scheduler is not None
-
-    def test_construct_with_callbacks(self, tiny_hymo_config) -> None:
-        model = HyMo(tiny_hymo_config.model)
-        cb = CallbackList()
-        trainer = Trainer(tiny_hymo_config, model, callbacks=cb)
-        assert trainer.callbacks is cb
 
     def test_train_step(self, tiny_hymo_config) -> None:
         model = HyMo(tiny_hymo_config.model)
@@ -104,32 +96,36 @@ class TestTrainer:
         assert trainer.token_count == B * T
 
     def test_save_and_load(self, tiny_hymo_config, tmp_path) -> None:
-        model = HyMo(tiny_hymo_config.model)
-        trainer = Trainer(tiny_hymo_config, model)
+        from dataclasses import replace
+        config = replace(tiny_hymo_config, run=replace(tiny_hymo_config.run, output_dir=str(tmp_path)))
+        model = HyMo(config.model)
+        trainer = Trainer(config, model)
         ckpt_path = trainer.save(tag="test_save")
         assert ckpt_path.exists()
         assert ckpt_path.suffix == ".pt"
 
         # Load into a fresh trainer.
-        model2 = HyMo(tiny_hymo_config.model)
-        trainer2 = Trainer(tiny_hymo_config, model2)
+        model2 = HyMo(config.model)
+        trainer2 = Trainer(config, model2)
         step = trainer2.load(ckpt_path)
         assert step == 0
         assert trainer2.step == 0
 
     def test_load_after_training(self, tiny_hymo_config, tmp_path) -> None:
-        model = HyMo(tiny_hymo_config.model)
-        trainer = Trainer(tiny_hymo_config, model)
-        B, T = 1, tiny_hymo_config.model.max_seq_len
-        tokens = torch.randint(0, tiny_hymo_config.model.vocab_size, (B, T))
-        targets = torch.randint(0, tiny_hymo_config.model.vocab_size, (B, T))
+        from dataclasses import replace
+        config = replace(tiny_hymo_config, run=replace(tiny_hymo_config.run, output_dir=str(tmp_path)))
+        model = HyMo(config.model)
+        trainer = Trainer(config, model)
+        B, T = 1, config.model.max_seq_len
+        tokens = torch.randint(0, config.model.vocab_size, (B, T))
+        targets = torch.randint(0, config.model.vocab_size, (B, T))
         trainer.train_step(tokens, targets)
         assert trainer.step == 1
 
         ckpt_path = trainer.save(tag="step_1")
 
-        model2 = HyMo(tiny_hymo_config.model)
-        trainer2 = Trainer(tiny_hymo_config, model2)
+        model2 = HyMo(config.model)
+        trainer2 = Trainer(config, model2)
         trainer2.load(ckpt_path)
         assert trainer2.step == 1
 
@@ -158,15 +154,6 @@ class TestTrainer:
         assert "val_loss" in metrics
         assert "val_ppl" in metrics
         assert torch.isfinite(torch.tensor(metrics["val_loss"]))
-
-    def test_make_state(self, tiny_hymo_config) -> None:
-        model = HyMo(tiny_hymo_config.model)
-        trainer = Trainer(tiny_hymo_config, model)
-        trainer.step = 100
-        trainer.token_count = 1_000_000
-        state = trainer._make_state()
-        assert state.step == 100
-        assert state.token_count == 1_000_000
 
 
 class TestTrainStepResult:

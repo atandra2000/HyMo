@@ -99,31 +99,72 @@ class TestGoesToNorMuon:
 
 
 class TestPartitionParameters:
-    def test_partition_against_real_model(self) -> None:
-        """The partition routes the right parameters on the real HyMo model."""
-        config = load_config("configs/hymo_750m.yaml")
-        model = HyMo(config.model)
-        partition = partition_parameters(model)
+    def test_partition_against_tiny_model(self, tiny_hymo_model) -> None:
+        """The partition routes the right parameters on the tiny HyMo
+        (M1-friendly). The rule is size-independent: every param
+        lands in exactly one of {AdamW, NorMuon}."""
+        partition = partition_parameters(tiny_hymo_model)
 
         # Every parameter must be in exactly one group.
         total = len(partition.adamw) + len(partition.nor_muon)
-        all_params = sum(1 for _ in model.parameters())
+        all_params = sum(1 for _ in tiny_hymo_model.parameters())
         # Some params are tied (head ↔ embed) so we may see one fewer.
         assert total <= all_params
         assert total >= all_params - 1
 
-    def test_partition_count_moe_experts(self) -> None:
-        """8 MLA layers × 16 experts × 3 matrices = 384 expert weights.
-        Wait — the v1.0 has 8 MLA layers, each with 16 routed + 1 shared.
-        16 routed × 3 + 1 shared × 3 = 51 expert tensors per MLA layer.
-        8 MLA layers × 51 = 408 expert tensors total.
-        """
+    @pytest.mark.heavy
+    def test_partition_against_full_model(self) -> None:
+        """v1.0 production partition sanity check. Gated by ``heavy``."""
         config = load_config("configs/hymo_750m.yaml")
         model = HyMo(config.model)
         partition = partition_parameters(model)
 
-        adamw_names = {id(p) for p in partition.adamw}
-        # Count how many routed expert weights landed on AdamW.
+        total = len(partition.adamw) + len(partition.nor_muon)
+        all_params = sum(1 for _ in model.parameters())
+        assert total <= all_params
+        assert total >= all_params - 1
+
+    def test_partition_count_moe_experts_tiny(self, tiny_hymo_model) -> None:
+        """Tiny: n MLA × n_routed_experts × 3 = routed expert weights on
+        AdamW; n MLA × n_shared_experts × 3 = shared expert weights on
+        AdamW. Counts are derived from the tiny config so the test stays
+        valid as the tiny expert count changes."""
+        m = tiny_hymo_model.config
+        n_mla = sum(
+            1 for layer in tiny_hymo_model.layers if hasattr(layer, "moe")
+        )
+        partition = partition_parameters(tiny_hymo_model)
+        adamw_ids = {id(p) for p in partition.adamw}
+
+        n_expert = 0
+        for name, p in tiny_hymo_model.named_parameters():
+            if (
+                ".experts." in name
+                and (
+                    name.endswith(".w1.weight")
+                    or name.endswith(".w2.weight")
+                    or name.endswith(".w3.weight")
+                )
+                and id(p) in adamw_ids
+            ):
+                n_expert += 1
+        assert n_expert == n_mla * m.n_routed_experts * 3
+
+        n_shared = 0
+        for name, p in tiny_hymo_model.named_parameters():
+            if ".shared_expert." in name and id(p) in adamw_ids:
+                n_shared += 1
+        assert n_shared == n_mla * m.n_shared_experts * 3
+
+    @pytest.mark.heavy
+    def test_partition_count_moe_experts_full(self) -> None:
+        """v1.0 production: 8 MLA × 16 routed × 3 = 384 expert
+        weights; 8 MLA × 1 shared × 3 = 24. Gated by ``heavy``."""
+        config = load_config("configs/hymo_750m.yaml")
+        model = HyMo(config.model)
+        partition = partition_parameters(model)
+        adamw_ids = {id(p) for p in partition.adamw}
+
         n_expert = 0
         for name, p in model.named_parameters():
             if (
@@ -133,21 +174,31 @@ class TestPartitionParameters:
                     or name.endswith(".w2.weight")
                     or name.endswith(".w3.weight")
                 )
-                and id(p) in adamw_names
+                and id(p) in adamw_ids
             ):
                 n_expert += 1
-        # 16 routed × 8 MLA layers × 3 matrices = 384.
         assert n_expert == 384
 
         n_shared = 0
         for name, p in model.named_parameters():
-            if ".shared_expert." in name and id(p) in adamw_names:
-                    n_shared += 1
-        # 1 shared × 8 MLA layers × 3 matrices = 24.
+            if ".shared_expert." in name and id(p) in adamw_ids:
+                n_shared += 1
         assert n_shared == 24
 
-    def test_partition_count_gdn_a_log(self) -> None:
-        """24 GDN layers × 1 A_log = 24 scalars on AdamW."""
+    def test_partition_count_gdn_a_log_tiny(self, tiny_hymo_model) -> None:
+        """Tiny: 3 GDN × 1 A_log = 3 scalars on AdamW."""
+        partition = partition_parameters(tiny_hymo_model)
+        adamw_ids = {id(p) for p in partition.adamw}
+        n_a_log = 0
+        for name, p in tiny_hymo_model.named_parameters():
+            if name.endswith(".A_log") and id(p) in adamw_ids:
+                n_a_log += 1
+        assert n_a_log == 3  # tiny: 3 GDN layers
+
+    @pytest.mark.heavy
+    def test_partition_count_gdn_a_log_full(self) -> None:
+        """v1.0 production: 24 GDN × 1 A_log = 24 scalars on AdamW.
+        Gated by ``heavy``."""
         config = load_config("configs/hymo_750m.yaml")
         model = HyMo(config.model)
         partition = partition_parameters(model)
@@ -156,7 +207,7 @@ class TestPartitionParameters:
         for name, p in model.named_parameters():
             if name.endswith(".A_log") and id(p) in adamw_ids:
                 n_a_log += 1
-        assert n_a_log == 24  # one per GDN layer
+        assert n_a_log == 24
 
     def test_parameter_partition_repr(self) -> None:
         p = ParameterPartition()
@@ -237,10 +288,10 @@ class TestOptimizers:
 
 
 class TestBuildOptimizers:
-    def test_build_from_real_model(self) -> None:
-        config = load_config("configs/hymo_750m.yaml")
-        model = HyMo(config.model)
-        opts = build_optimizers(model, config.optimizer)
+    def test_build_from_tiny_model(self, tiny_hymo_config) -> None:
+        """Build optimizers on the tiny model (M1-friendly)."""
+        model = HyMo(tiny_hymo_config.model)
+        opts = build_optimizers(model, tiny_hymo_config.optimizer)
         assert isinstance(opts, Optimizers)
         assert isinstance(opts.adamw, CautiousAdamW)
         # NorMuon may be None if all params went to AdamW; in practice
@@ -248,14 +299,26 @@ class TestBuildOptimizers:
         assert opts.nor_muon is not None
         assert isinstance(opts.nor_muon, NorMuon)
 
-    def test_lr_ratio_preserved(self) -> None:
-        """lr_muon / lr_adamw ≈ 66.7 (architecture doc §5.3)."""
-        config = load_config("configs/hymo_750m.yaml")
-        model = HyMo(config.model)
-        opts = build_optimizers(model, config.optimizer)
+    def test_lr_ratio_preserved(self, tiny_hymo_config) -> None:
+        """The 66.7× lr ratio is a config property and is preserved
+        when building optimizers (verified on tiny)."""
+        model = HyMo(tiny_hymo_config.model)
+        opts = build_optimizers(model, tiny_hymo_config.optimizer)
         nm_lr = opts.nor_muon.defaults["lr"]
         aw_lr = opts.adamw.defaults["lr"]
         assert nm_lr / aw_lr == pytest.approx(66.67, abs=0.01)
+
+    @pytest.mark.heavy
+    def test_build_from_full_model(self) -> None:
+        """v1.0 production: build optimizers on the full HyMo.
+        Gated by ``heavy``."""
+        config = load_config("configs/hymo_750m.yaml")
+        model = HyMo(config.model)
+        opts = build_optimizers(model, config.optimizer)
+        assert isinstance(opts, Optimizers)
+        assert isinstance(opts.adamw, CautiousAdamW)
+        assert opts.nor_muon is not None
+        assert isinstance(opts.nor_muon, NorMuon)
 
 
 # ----------------------------------------------------------------------

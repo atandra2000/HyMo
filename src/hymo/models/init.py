@@ -1,4 +1,4 @@
-"""μP initialization (Phase 1 placeholder).
+"""μP initialization (Phase 2).
 
 The real implementation (architecture doc §4, roadmap B7) applies:
 
@@ -6,20 +6,18 @@ The real implementation (architecture doc §4, roadmap B7) applies:
   ``"A_log"``, ``"dt_bias"``, ``"router"``, ``"output_head"``, ``"bias"``,
   ``"q_norm"``, ``"kv_norm"``, ``"q_norm_qk"``, ``"k_norm_qk"``, ``"mtp"``,
   or ``"D"``.
-- Standard init (``std = 0.02``) on every 1D parameter.
-- μP-scaled init (``std = 1 / dim``) on every 2D attention/MLP weight.
+- Standard init (``std = 1 / dim``) on every 2D attention/MLP weight.
 - ``std = 1 / sqrt(dim)`` on the embedding.
-
-This placeholder defines the function signature; the body raises
-:class:`NotImplementedError_`.
 """
 
 from __future__ import annotations
 
+import math
+
+import torch
 from torch import nn
 
 from hymo.core.config import ModelConfig
-from hymo.core.exceptions import NotImplementedError_
 
 __all__ = ["mup_init", "MUP_ZERO_KEYWORDS"]
 
@@ -48,17 +46,25 @@ MUP_ZERO_KEYWORDS: frozenset[str] = frozenset(
 
 
 def mup_init(model: nn.Module, config: ModelConfig) -> None:
-    """Apply μP initialization in place.
+    """Apply μP initialization in place (architecture doc §4).
 
-    Architecture doc §4. Phase 1 placeholder.
-
-    The function is silent on success. On failure, raise the underlying
-    error.
+    Zero-inits the scalars/gains, μP-scales the 2D weights, and uses an
+    embedding-scale init for the embedding table. Silent on success.
     """
-    raise NotImplementedError_(
-        "mup_init is a Phase 1 placeholder; the real implementation "
-        "lands in Phase 2 (design §4, roadmap B7)."
-    )
+    dim = config.dim
+    attn_std = 1.0 / dim
+    embed_std = 1.0 / math.sqrt(dim)
+    for name, p in model.named_parameters():
+        if zero_init_predicate(name):
+            with torch.no_grad():
+                p.data.zero_()
+            continue
+        if p.dim() < 2:
+            # 1D (non-scalar) params keep their default init; leave as-is.
+            continue
+        with torch.no_grad():
+            std = embed_std if "embed" in name else attn_std
+            p.data.normal_(mean=0.0, std=std)
 
 
 def zero_init_predicate(param_name: str) -> bool:

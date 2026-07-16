@@ -65,11 +65,30 @@ class TestPublicApi:
 class TestEndToEndConfig:
     """Load the production config, build a model, build optimizers."""
 
-    def test_load_and_build(self) -> None:
+    def test_load_and_build_tiny(self, tiny_hymo_config) -> None:
+        """Build a HyMo + optimizers from the tiny config (M1-friendly)."""
+        model = build_hymo(tiny_hymo_config)
+
+        # Tiny: 4 layers, 1 MLA + 3 GDN.
+        assert model.config.n_layers == 4
+        from hymo.models import GatedDeltaNetBlock, MLABlock
+
+        n_mla = sum(1 for layer in model.layers if isinstance(layer, MLABlock))
+        n_gdn = sum(1 for layer in model.layers if isinstance(layer, GatedDeltaNetBlock))
+        assert (n_mla, n_gdn) == (1, 3)
+
+        # Build optimizers.
+        opts = build_optimizers(model, tiny_hymo_config.optimizer)
+        assert opts.nor_muon is not None
+        assert opts.adamw is not None
+
+    @pytest.mark.heavy
+    def test_load_and_build_full(self) -> None:
+        """v1.0 production: load + build the 1.86B-param HyMo.
+        Gated by ``heavy`` (M1 default skips)."""
         config = load_config("configs/hymo_750m.yaml")
         model = build_hymo(config)
 
-        # Model has 32 layers, 8 MLA + 24 GDN.
         assert model.config.n_layers == 32
         from hymo.models import GatedDeltaNetBlock, MLABlock
 
@@ -77,36 +96,66 @@ class TestEndToEndConfig:
         n_gdn = sum(1 for layer in model.layers if isinstance(layer, GatedDeltaNetBlock))
         assert (n_mla, n_gdn) == (8, 24)
 
-        # Build optimizers.
         opts = build_optimizers(model, config.optimizer)
         assert opts.nor_muon is not None
         assert opts.adamw is not None
 
-    def test_lr_ratio_in_production_config(self) -> None:
-        config = load_config("configs/hymo_750m.yaml")
-        # lr_muon / lr_adamw ≈ 66.7
+    def test_lr_ratio_in_production_config(self, production_config_only) -> None:
+        """The 66.7× lr ratio is a config property (no model build)."""
+        config = production_config_only
         assert config.optimizer.muon_lr / config.optimizer.adamw_lr == pytest.approx(
             66.67, abs=0.01
         )
 
-    def test_30b_tokens_57220_steps(self) -> None:
-        config = load_config("configs/hymo_750m.yaml")
+    def test_30b_tokens_57220_steps(self, production_config_only) -> None:
+        """The 30B / 57,220-step arithmetic is a config property."""
+        config = production_config_only
         per_step = config.training.per_step_tokens
         steps = config.scheduler.total_steps
         # 57,220 * 524,288 = 29,999,759,360 ≈ 30B.
         assert per_step * steps == pytest.approx(30e9, rel=1e-3)
 
-    def test_wsd_fractions_sum_to_one(self) -> None:
-        config = load_config("configs/hymo_750m.yaml")
+    def test_wsd_fractions_sum_to_one(self, production_config_only) -> None:
+        """WSD fractions sum to 1.0 (a config property)."""
+        config = production_config_only
         s = config.scheduler
         assert s.warmup_frac + s.stable_frac + s.decay_frac == pytest.approx(1.0)
 
 
 class TestPartitioningEndToEnd:
-    """The partition routes the right parameters to the right optimizer."""
+    """The partition routes the right parameters to the right optimizer.
 
-    def test_384_routed_expert_weights_on_adamw(self) -> None:
-        """8 MLA layers × 16 experts × 3 matrices = 384."""
+    M1-friendly: runs on the tiny model. The v1.0 production
+    numbers (384 routed expert weights, etc.) are verified in the
+    ``heavy`` test below.
+    """
+
+    def test_routed_expert_weights_on_adamw_tiny(self, tiny_hymo_model) -> None:
+        """Tiny: n MLA × n_routed_experts × 3 routed expert weights on
+        AdamW. Counts derived from the tiny config (no hardcoding)."""
+        m = tiny_hymo_model.config
+        n_mla = sum(1 for layer in tiny_hymo_model.layers if hasattr(layer, "moe"))
+        partition = partition_parameters(tiny_hymo_model)
+        adamw_ids = {id(p) for p in partition.adamw}
+
+        n_expert = 0
+        for name, p in tiny_hymo_model.named_parameters():
+            if (
+                ".experts." in name
+                and (
+                    name.endswith(".w1.weight")
+                    or name.endswith(".w2.weight")
+                    or name.endswith(".w3.weight")
+                )
+                and id(p) in adamw_ids
+            ):
+                n_expert += 1
+        assert n_expert == n_mla * m.n_routed_experts * 3
+
+    @pytest.mark.heavy
+    def test_384_routed_expert_weights_on_adamw_full(self) -> None:
+        """v1.0 production: 8 MLA × 16 routed × 3 = 384 expert
+        weights on AdamW. Gated by ``heavy``."""
         config = load_config("configs/hymo_750m.yaml")
         model = HyMo(config.model)
         partition = partition_parameters(model)
@@ -126,8 +175,20 @@ class TestPartitioningEndToEnd:
                 n_expert += 1
         assert n_expert == 384
 
-    def test_24_shared_expert_weights_on_adamw(self) -> None:
-        """8 MLA layers × 1 shared × 3 matrices = 24."""
+    def test_shared_expert_weights_on_adamw_tiny(self, tiny_hymo_model) -> None:
+        """Tiny: 1 MLA layer × 1 shared × 3 matrices = 3."""
+        partition = partition_parameters(tiny_hymo_model)
+        adamw_ids = {id(p) for p in partition.adamw}
+
+        n_shared = 0
+        for name, p in tiny_hymo_model.named_parameters():
+            if ".shared_expert." in name and id(p) in adamw_ids:
+                n_shared += 1
+        assert n_shared == 3
+
+    @pytest.mark.heavy
+    def test_24_shared_expert_weights_on_adamw_full(self) -> None:
+        """v1.0 production: 8 MLA × 1 shared × 3 = 24. Gated by ``heavy``."""
         config = load_config("configs/hymo_750m.yaml")
         model = HyMo(config.model)
         partition = partition_parameters(model)
@@ -139,8 +200,20 @@ class TestPartitioningEndToEnd:
                 n_shared += 1
         assert n_shared == 24
 
-    def test_24_gdn_a_log_on_adamw(self) -> None:
-        """24 GDN layers × 1 A_log = 24."""
+    def test_gdn_a_log_on_adamw_tiny(self, tiny_hymo_model) -> None:
+        """Tiny: 3 GDN layers × 1 A_log = 3 scalars on AdamW."""
+        partition = partition_parameters(tiny_hymo_model)
+        adamw_ids = {id(p) for p in partition.adamw}
+        n = sum(
+            1
+            for name, p in tiny_hymo_model.named_parameters()
+            if name.endswith(".A_log") and id(p) in adamw_ids
+        )
+        assert n == 3
+
+    @pytest.mark.heavy
+    def test_24_gdn_a_log_on_adamw_full(self) -> None:
+        """v1.0 production: 24 GDN × 1 A_log = 24. Gated by ``heavy``."""
         config = load_config("configs/hymo_750m.yaml")
         model = HyMo(config.model)
         partition = partition_parameters(model)
@@ -152,13 +225,12 @@ class TestPartitioningEndToEnd:
         )
         assert n == 24
 
-    def test_no_expert_on_nor_muon(self) -> None:
-        """No MoE expert weight should be on NorMuon (claim 2)."""
-        config = load_config("configs/hymo_750m.yaml")
-        model = HyMo(config.model)
-        partition = partition_parameters(model)
+    def test_no_expert_on_nor_muon_tiny(self, tiny_hymo_model) -> None:
+        """No MoE expert weight should be on NorMuon (claim 2).
+        Verified on the tiny model — the rule is size-independent."""
+        partition = partition_parameters(tiny_hymo_model)
         for p in partition.nor_muon:
-            for name, q in model.named_parameters():
+            for name, q in tiny_hymo_model.named_parameters():
                 if q is p and ".experts." in name:
                     pytest.fail(f"Expert weight {name} on NorMuon")
                 if q is p and ".shared_expert." in name:
@@ -212,9 +284,10 @@ class TestCallbackListWithTrainer:
 class TestProjectPathsFromConfig:
     """Paths can be derived from a :class:`RunConfig`."""
 
-    def test_paths_from_production_config(self) -> None:
-        config = load_config("configs/hymo_750m.yaml")
-        paths = ProjectPaths.from_config(config.run)
+    def test_paths_from_production_config(self, production_config_only) -> None:
+        """The v1.0 RunConfig produces the canonical project paths.
+        No model build required."""
+        paths = ProjectPaths.from_config(production_config_only.run)
         # ``output_dir`` is ``<root> / config.output_dir``; default root
         # is the current working directory.
         assert paths.output_dir == Path.cwd() / "checkpoints/pretrain"

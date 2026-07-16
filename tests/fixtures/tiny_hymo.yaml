@@ -4,7 +4,7 @@ model:
   vocab_size: 1024
   max_seq_len: 64
   n_layers: 4                  # 1 MLA + 3 GDN at positions {0, 4, 8, 12} -- wait, 4 layers
-  dim: 64
+  dim: 48
   tie_embeddings: true
   n_heads: 4
   n_kv_groups: 2
@@ -20,11 +20,11 @@ model:
   gdn_d_inner: 32
   gdn_chunk_size: 16
   nope_hybrid_gdn_enabled: false
-  n_routed_experts: 4
+  n_routed_experts: 3
   n_shared_experts: 1
   n_activated_experts: 2
-  moe_inter_dim: 64
-  inter_dim: 64
+  moe_inter_dim: 24
+  inter_dim: 32
   mtp_depth: 2
   mtp_loss_weights: [0.3, 0.1]
   logit_softcap: 15.0

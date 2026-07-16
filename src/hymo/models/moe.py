@@ -1,7 +1,6 @@
-"""Mixture of Experts and DenseFFN (Phase 1 placeholders).
+"""Mixture of Experts and DenseFFN (Phase 2).
 
-The real implementation (architecture doc §2.5 and §2.6, roadmap B3)
-implements the DeepSeekMoE with:
+Implements the DeepSeekMoE (architecture doc §2.5 and §2.6, roadmap B3):
 
 - FP32 router cast in ``gate_forward``.
 - 16 routed experts + 1 shared expert + top-2 routing.
@@ -11,10 +10,6 @@ implements the DeepSeekMoE with:
   in Phase 3 for sort-by-size sharding).
 
 :class:`DenseFFN` is the dense SwiGLU used on GDN blocks (design §2.6).
-
-This placeholder defines the parameter shapes so the FSDP wrapper in
-Phase 3 can correctly wrap each expert; forward passes raise
-:class:`NotImplementedError_`.
 """
 
 from __future__ import annotations
@@ -23,9 +18,9 @@ from typing import cast
 
 import torch
 from torch import nn
+from torch.nn import functional as F
 
 from hymo.core.config import ModelConfig
-from hymo.core.exceptions import NotImplementedError_
 
 __all__ = ["SwiGLUExpert", "DenseFFN", "DeepSeekMoE"]
 
@@ -47,10 +42,9 @@ class SwiGLUExpert(nn.Module):
         self.w3 = nn.Linear(dim, inter_dim, bias=False)
 
     def forward(self, x: torch.Tensor) -> torch.Tensor:
-        """Phase 1 placeholder — raises :class:`NotImplementedError_`."""
-        raise NotImplementedError_(
-            "SwiGLUExpert.forward is a Phase 1 placeholder; "
-            "the real implementation lands in Phase 2 (design §2.5)."
+        """SwiGLU: ``w2(silu(w1(x)) * w3(x))``."""
+        return cast(
+            torch.Tensor, self.w2(F.silu(self.w1(x)) * self.w3(x))
         )
 
 
@@ -71,17 +65,16 @@ class DenseFFN(nn.Module):
         self.w3 = nn.Linear(dim, inter_dim, bias=False)
 
     def forward(self, x: torch.Tensor) -> torch.Tensor:
-        """Phase 1 placeholder — raises :class:`NotImplementedError_`."""
-        raise NotImplementedError_(
-            "DenseFFN.forward is a Phase 1 placeholder; "
-            "the real implementation lands in Phase 2 (design §2.6)."
+        """Dense SwiGLU: ``w2(silu(w1(x)) * w3(x))``."""
+        return cast(
+            torch.Tensor, self.w2(F.silu(self.w1(x)) * self.w3(x))
         )
 
 
 class DeepSeekMoE(nn.Module):
     """DeepSeek-style MoE with aux-loss-free routing.
 
-    Architecture doc §2.5. Phase 1 placeholder.
+    Architecture doc §2.5. Phase 2 implementation.
 
     The v1.0 spec is:
 
@@ -132,25 +125,96 @@ class DeepSeekMoE(nn.Module):
         )
 
     def gate_forward(self, x: torch.Tensor) -> torch.Tensor:
-        """FP32 router cast (Phase 2 real implementation).
+        """FP32 router cast (design §2.5).
 
-        Phase 1 placeholder: just runs the linear in the input dtype
-        so the module is constructable; the real FP32 cast lands in
-        Phase 2 (design §2.5).
+        The gate matmul is computed in float32 (input + weight + bias)
+        to avoid sigmoid rounding at BF16, then cast back to the input
+        dtype for downstream routing. Stored as ``_last_indices`` so
+        :meth:`update_gate_bias` can consume the most recent routing.
         """
-        return cast(torch.Tensor, self.gate(x))
+        x_fp32 = x.float()
+        w_fp32 = self.gate.weight.float()
+        b_fp32 = self.gate.bias.float()
+        logits = F.linear(x_fp32, w_fp32, b_fp32)            # (..., n_routed)
+        return logits.to(x.dtype)
 
     def update_gate_bias(self, speed: float = 0.001) -> None:
-        """EMA-smoothed expert-load bias update (Phase 2)."""
-        raise NotImplementedError_(
-            "DeepSeekMoE.update_gate_bias is a Phase 1 placeholder; "
-            "the real implementation lands in Phase 2 (design §2.5)."
-        )
+        """EMA-smoothed expert-load bias update (design §2.5).
+
+        Updates ``ema_expert_counts`` with the most recent routing
+        counts, then nudges the gate bias toward load balance:
+        over-loaded experts (``> avg * 1.05``) are penalized, under-
+        loaded experts (``< avg * 0.95``) are rewarded. The threshold
+        tightens the prior 1.10× to 1.05×.
+        """
+        if getattr(self, "_last_indices", None) is None:
+            return
+        counts = torch.bincount(
+            self._last_indices.flatten(), minlength=self.n_routed
+        ).float()
+        ema = cast(torch.Tensor, self.ema_expert_counts)
+        ema.mul_(1.0 - self.ema_alpha).add_(counts, alpha=self.ema_alpha)
+        avg = ema.mean()
+        over = ema > avg * 1.05
+        under = ema < avg * 0.95
+        with torch.no_grad():
+            new_bias = self.gate.bias.clone()
+            new_bias[over] -= speed
+            new_bias[under] += speed
+            self.gate.bias.copy_(new_bias)
 
     def forward(self, x: torch.Tensor) -> torch.Tensor:
-        """Phase 1 placeholder — raises :class:`NotImplementedError_`."""
-        raise NotImplementedError_(
-            "DeepSeekMoE.forward is a Phase 1 placeholder; "
-            "the real implementation lands in Phase 2 (design §2.5, "
-            "roadmap B3)."
-        )
+        """MoE forward: top-k routing over activated tokens (design §2.5).
+
+        Parameters
+        ----------
+        x : torch.Tensor
+            Input of shape ``(B, T, dim)``.
+
+        Returns
+        -------
+        torch.Tensor
+            Output of shape ``(B, T, dim)`` — the weighted sum of the
+            top-k routed experts plus the (always-on) shared expert.
+        """
+        B, T, D = x.shape
+        # Router logits in FP32 (design §2.5).
+        logits = self.gate_forward(x)                        # (B, T, n_routed)
+        probs = F.softmax(logits.float(), dim=-1)           # (B, T, n_routed)
+        # Top-k expert selection (capacity-aware).
+        k = min(self.n_activated, self.n_routed)
+        top_weights, top_indices = torch.topk(probs, k, dim=-1)  # (B, T, k)
+        self._last_indices = top_indices                   # for EMA bias update
+
+        # Flatten the token dimension for expert dispatch.
+        x_flat = x.view(B * T, D)
+        out = x_flat.new_zeros(B * T, D)
+
+        # Capacity cap: max tokens dispatched to any single expert.
+        capacity = int(self.capacity_factor * (B * T * k) / self.n_routed)
+        capacity = max(capacity, 1)
+
+        # Dispatch each activated slot to its chosen expert. Outer loop is
+        # over experts (n_routed=16) so the per-expert matmul is batched;
+        # capacity capping keeps the first `capacity` tokens per expert.
+        for e in range(self.n_routed):
+            # Tokens routed to expert e in any of the k slots.
+            e_mask = (top_indices == e)                     # (B, T, k) bool
+            flat_mask = e_mask.any(dim=-1).reshape(-1)      # (B*T,)
+            sel = flat_mask.nonzero(as_tuple=False).reshape(-1)
+            if sel.numel() == 0:
+                continue
+            # Apply capacity cap: keep only the first `capacity` tokens.
+            if sel.numel() > capacity:
+                sel = sel[:capacity]
+            # Routing weight = sum of weights across the slots that chose e.
+            w_e = probs.gather(-1, top_indices).masked_fill(
+                ~e_mask, 0.0
+            ).sum(dim=-1).reshape(-1)                       # (B*T,)
+            w_e = w_e[sel].unsqueeze(-1)                    # (n_e, 1)
+            y_e = self.experts[e](x_flat[sel])              # (n_e, D)
+            out.index_add_(0, sel, y_e * w_e)
+        # Shared expert is always active (added to every token).
+        if self.shared_expert is not None:
+            out = out + self.shared_expert(x_flat)
+        return out.view(B, T, D)

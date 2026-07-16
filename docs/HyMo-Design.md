@@ -898,7 +898,16 @@ Compare:
 
 ### 10.3 Tests
 
-- `tests/test_moe_expert_excluded_from_nor_muon.py` — regression test for the optimizer partition
+> **Test style (hard rule):** No test may build the full 1.86 B-parameter
+> model in the default run. Default tests use the tiny (~760 K-param) config
+> (`tiny_hymo_model` / `tiny_hymo_config` fixtures, or the `ModelConfig()`
+> shadow in `tests/unit/test_models.py`). Any test that constructs the
+> production model MUST be marked `@pytest.mark.heavy` and is auto-skipped
+> unless `pytest --run-heavy` is passed (CI / GPU pod only). Production-scale
+> arithmetic (e.g. 384 expert weights, 32 layers, 465 M sharded params) lives
+> behind `heavy`. See `AGENTS.md` for the full rules.
+
+- `tests/test_moe_expert_excluded_from_nor_muon.py` — regression test for the optimizer partition (default-run: asserts on the tiny model; heavy variant checks 128 expert tensors = 16×8×3)
 - `tests/test_partial_rope.py` — verify RoPE is applied to 25% of head_dim
 - `tests/test_nope_hybrid.py` (new, **v1.1** — gated on ablation claim 7) — verify every 4th GDN layer has NoPE
 - `tests/test_mtp_depth_default.py` — verify mtp_depth=2, mtp_loss_weights=[0.3, 0.1]
@@ -908,12 +917,12 @@ Compare:
 - `tests/test_gdn_compile.py` (new, §12a.3) — verify the torch.compile-decorated GDN output matches eager-GDN within 1e-3 tolerance
 - `tests/test_mla_cuda_graph.py` (new, §12a.4) — verify the CUDA-graph-captured MLA output matches eager-MLA within 1e-3 tolerance; auto-skips if CUDA Graphs unsupported
 - `tests/test_moe_fp16_indices.py` (new, §12a.2) — verify FP16 scatter-add indices select the same experts as BF16 indices on 1k random inputs
-- `tests/test_fsdp_param_count.py` — verify FSDP-2 shards the param count correctly
-- `tests/test_fsdp_nor_muon_sort.py` — verify the NorMuon param list is sorted by size and round-robin assigned
+- `tests/test_fsdp_param_count.py` — **`@pytest.mark.heavy`** (builds the 1.86B model); verify FSDP-2 shards the param count correctly (~465M per rank)
+- `tests/test_fsdp_nor_muon_sort.py` — **`@pytest.mark.heavy`** (builds the 1.86B model); verify the NorMuon param list is sorted by size and round-robin assigned
 - `tests/test_init_broadcast.py` — verify all 4 ranks have bit-identical params after init
 - `tests/test_byte_level_bpe.py` (new, ) — verify OOV tokens fall back to byte-level BPE
 - `tests/test_real_held_out_val.py` (new, ) — verify validation uses real FineWeb-Edu held-out, not synthetic
-- All v1.0 tests must pass before the primary run starts. v1.1 tests are gated on the corresponding ablation completing.
+- All v1.0 default (non-heavy) tests must pass before the primary run starts. Heavy tests run on CI / the GPU pod. v1.1 tests are gated on the corresponding ablation completing.
 
 ### 10.4 Documentation
 

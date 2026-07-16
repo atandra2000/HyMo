@@ -33,10 +33,18 @@ evaluation harness). The `dev` extra pulls pytest, mypy, and ruff.
 ## Quick check
 
 ```bash
-pytest tests/unit -q
+pytest tests/        # default run: CPU-friendly, ~1 min, heavy tests auto-skipped
+pytest tests/ --run-heavy   # opt-in: also runs tests that build the 1.86B model
 mypy src/hymo
 ruff check src/hymo
 ```
+
+> **Tests stay cool by design.** The default `pytest` run never builds the
+> 1.86 B-parameter production model — it uses a tiny (~760 K-param) config
+> for everything. Tests that do need production scale are marked
+> `@pytest.mark.heavy` and are skipped unless you pass `--run-heavy`
+> (run those on CI / a GPU pod). See `AGENTS.md` for the full test
+> rules.
 
 ## Documentation
 

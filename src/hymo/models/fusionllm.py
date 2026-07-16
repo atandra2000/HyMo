@@ -1,18 +1,9 @@
-"""The HyMo 32-layer 3:1 GDN:MLA stack (Phase 1 placeholder).
+"""The HyMo 32-layer 3:1 GDN:MLA stack (Phase 2).
 
 The real implementation (architecture doc §2, roadmap B5) builds the
 32-block stack with 8 MLA layers at positions {0, 4, 8, ..., 28} and
 24 GDN layers at the complement, with the per-layer ``use_rope`` flag
 honoring the NoPE-hybrid (CR-12; default OFF for v1.0).
-
-This placeholder:
-
-- Builds the 32 layers as :class:`GatedDeltaNetBlock` (24) and
-  :class:`MLABlock` (8) with the correct indices.
-- Wires the embed, head (tied), final norm, and logit softcap.
-- Forward raises :class:`NotImplementedError_`.
-- The class is registered with :data:`hymo.registry.MODELS` under
-  ``"hymo"``.
 
 Public API
 ----------
@@ -27,7 +18,6 @@ import torch
 from torch import nn
 
 from hymo.core.config import HyMoConfig, ModelConfig
-from hymo.core.exceptions import NotImplementedError_
 from hymo.models.gdn import GatedDeltaNetBlock
 from hymo.models.mla import MLABlock
 from hymo.models.mtp import MultiTokenPrediction
@@ -40,12 +30,7 @@ __all__ = ["HyMo", "build_hymo"]
 class HyMo(nn.Module):
     """The 32-layer 3:1 GDN:MLA hybrid model.
 
-    Architecture doc §2. Phase 1 placeholder.
-
-    Parameters
-    ----------
-    config : ModelConfig
-        The model config (vocab size, layers, dim, etc.).
+    Architecture doc §2. Phase 2 implementation.
     """
 
     def __init__(self, config: ModelConfig) -> None:
@@ -81,7 +66,7 @@ class HyMo(nn.Module):
                     GatedDeltaNetBlock(config, layer_idx=i, use_rope=use_rope)
                 )
 
-        # MTP head (depth=2; shares main head). Wired but inactive.
+        # MTP head (depth=2; shares main head).
         self._mtp: MultiTokenPrediction | None
         if config.mtp_depth > 0:
             self._mtp = MultiTokenPrediction(config, main_model=self)
@@ -102,31 +87,46 @@ class HyMo(nn.Module):
             if not only_trainable or p.requires_grad
         )
 
-    def forward(self, tokens: torch.Tensor) -> torch.Tensor:
-        """Phase 1 placeholder — raises :class:`NotImplementedError_`.
+    def _run_layers(self, x: torch.Tensor) -> torch.Tensor:
+        """Run the 32-layer stack, honoring per-layer ``use_checkpoint``."""
+        for layer in self.layers:
+            use_cp = getattr(layer, "use_checkpoint", False)
+            if use_cp and self.training:
+                x = torch.utils.checkpoint.checkpoint(layer, x, use_reentrant=False)
+            else:
+                x = layer(x)
+        return x
 
-        The real forward (architecture doc §2, roadmap B5) runs the
-        32-layer stack with the per-layer ``use_checkpoint`` flag and
-        returns ``(logits, hidden)`` or just ``logits`` depending on
-        the caller.
+    def forward(self, tokens: torch.Tensor) -> torch.Tensor:
+        """Run the full forward and return next-token logits (design §2).
+
+        Parameters
+        ----------
+        tokens : torch.Tensor
+            Token ids of shape ``(B, T)``.
+
+        Returns
+        -------
+        torch.Tensor
+            Logits of shape ``(B, T, vocab_size)``.
         """
-        raise NotImplementedError_(
-            "HyMo.forward is a Phase 1 placeholder; the real "
-            "implementation lands in Phase 2 (design §2, roadmap B5)."
-        )
+        hidden = self.forward_with_hidden(tokens)[1]
+        logits = self.head(hidden)
+        return self.softcap(logits)
 
     def forward_with_hidden(
         self, tokens: torch.Tensor, start_pos: int = 0
     ) -> tuple[torch.Tensor, torch.Tensor]:
         """Forward that also returns the last hidden state (for MTP).
 
-        Phase 1 placeholder — raises :class:`NotImplementedError_`.
+        Returns ``(logits, hidden)`` where ``hidden`` is the normalized
+        pre-head representation that the MTP heads chain on.
         """
-        raise NotImplementedError_(
-            "HyMo.forward_with_hidden is a Phase 1 placeholder; "
-            "the real implementation lands in Phase 2 (design §2.8, "
-            "roadmap B5)."
-        )
+        x = self.embed(tokens)                       # (B, T, dim)
+        x = self._run_layers(x)                      # (B, T, dim)
+        hidden = self.norm(x)                        # (B, T, dim)
+        logits = self.head(hidden)                   # (B, T, vocab)
+        return self.softcap(logits), hidden
 
     def softcap(self, logits: torch.Tensor) -> torch.Tensor:
         """Apply the logit softcap (PaLM-style).

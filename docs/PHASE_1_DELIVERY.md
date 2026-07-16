@@ -276,6 +276,14 @@ plus the generic `Registry` class.
 **Test framework:** pytest 8.0+, `mypy --strict` for static type checks,
 `ruff` for linting. All config in `pyproject.toml`.
 
+**Cool-by-default test policy (hard rule):** the default `pytest` run never
+builds the 1.86 B-parameter production model. Every default test uses the
+tiny (~760 K-param) config (`tiny_hymo_model` / `tiny_hymo_config` fixtures,
+or the `ModelConfig()` shadow in `tests/unit/test_models.py`). Tests that do
+need production scale are marked `@pytest.mark.heavy`; `tests/conftest.py`
+auto-skips them unless `pytest --run-heavy` is passed (CI / GPU pod only).
+See `AGENTS.md` for the full rules.
+
 **Test layout:**
 
 | File | Tests | What it covers |
@@ -288,20 +296,21 @@ plus the generic `Registry` class.
 | `tests/unit/test_callbacks.py` | 10 | `TrainerState` defaults; `CallbackList` dispatches in order; missing methods are skipped; callback exceptions are isolated; add/remove |
 | `tests/unit/test_precision_seed_paths.py` | 16 | `resolve_dtype` (bf16/fp32/fp16); precision context managers; `set_seed` is deterministic; `seed_for_rank` derives per-rank; `ProjectPaths` builds subpaths and creates dirs |
 | `tests/unit/test_checkpoint.py` | 6 | `atomic_write_bytes` writes / creates parents / overwrites / no tmp left; `atomic_write_with` calls writer + cleans up on failure |
-| `tests/unit/test_models.py` | 40+ | Every placeholder constructs with the v1.0 config; every forward raises `NotImplementedError_`; HyMo has 32 layers (8 MLA + 24 GDN); MQA-4 + partial-RoPE 25%; tied vs untied embeddings; `softcap` works and is disabled at 0; NoPE-hybrid (CR-12) is OFF by default and the 7 GDN positions are correct when ON |
-| `tests/unit/test_training.py` | 30+ | `goes_to_adamw` routes embed/head/norm/gate/scalars/MoE experts to AdamW; attention/MLP weights go to NorMuon; the partition on the real HyMo model routes exactly 384 routed expert weights and 24 shared expert weights to AdamW; `NorMuon` + `CautiousAdamW` construct and reject bad params; `build_optimizers` preserves the 66.67× lr ratio; `JointWSDScheduler._decay_factor` for linear/cosine/sqrt |
+| `tests/unit/test_models.py` | 65 | Every submodule constructs from a `ModelConfig`; real forward passes are finite and shape-correct on the tiny config; HyMo assembles 4 layers (3 GDN + 1 MLA by default); MQA-4 + partial-RoPE 25%; tied vs untied embeddings; `softcap` works and is disabled at 0; NoPe-hybrid (CR-12) positions are correct when ON. Heavy tests build the full model and check 32 layers (8 MLA + 24 GDN) |
+| `tests/unit/test_training.py` | 30+ | `goes_to_adamw` routes embed/head/norm/gate/scalars/MoE experts to AdamW; attention/MLP weights go to NorMuon; the partition on the **tiny** HyMo model routes the (config-derived) expert weights to AdamW; **heavy** variant checks the full model routes exactly 384 routed expert weights and 24 shared expert weights; `NorMuon` + `CautiousAdamW` construct and reject bad params; `build_optimizers` preserves the 66.67× lr ratio; `JointWSDScheduler._decay_factor` for linear/cosine/sqrt |
 | `tests/unit/test_fsdp_trainer.py` | 16 | FSDP / checkpoint / trainer placeholders raise; `CheckpointState` defaults; `Trainer` constructs with model + callbacks; `_make_state` populates from instance attrs |
 | `tests/unit/test_data.py` | 30+ | `SourceSpec` validation; `DataConfig` weights sum to 1.0; load/save YAML round-trip; the production `hymo_mixture.yaml` has 10 sources summing to 1.0 and 30B tokens; `ExtendedTokenizer` exposes the right vocab size; all 10 source loaders are registered with `DATA_SOURCES` |
 | `tests/unit/test_eval.py` | 12 | The 3 baselines each have 6 metrics; the v1.0 PPL target (≤ 2.10) is `mobile_moe_0.9b["fineweb_edu_ppl"]`; the comparison table produces 8 lines (header + separator + 6 metric rows); `run_harness_eval` and `run_all` raise |
 | `tests/unit/test_ablations.py` | 7 | 4 ablation families registered; family A has 2 variants, B has 3, C has 3, D has 2; each gets 7.5B tokens; `build_ablation_config` raises |
-| `tests/integration/test_foundation.py` | 10+ | Load the production config → build HyMo → 8 MLA + 24 GDN → build optimizers; lr ratio 66.67; 30B / 524,288 ≈ 57,220 steps; 384 routed expert weights on AdamW (claim 2 verified); NoPE-hybrid CR-12 default verified; derived config (e.g. MTP off) works; `CallbackList` integrates with `TrainerState`; `ProjectPaths.from_config(run)`; `MetricsLogger` round-trip; `HyMo` is registered with `MODELS` |
-| **Total** | **308** | |
+| `tests/integration/test_foundation.py` | 10+ | Build the **tiny** HyMo → 8 MLA + 24 GDN (config-derived) → build optimizers; lr ratio 66.67; routed expert weights on AdamW (claim 2 verified at tiny scale); NoPE-hybrid CR-12 default verified; derived config (e.g. MTP off) works; `CallbackList` integrates with `TrainerState`; `ProjectPaths.from_config(run)`; `MetricsLogger` round-trip; `HyMo` is registered with `MODELS`. **Heavy** variant builds the full model for the 57,220-step count |
+| **Total (default run)** | **321 passed** | 17 `heavy` tests auto-skipped in the default run |
 
 **Conftest (auto-discovered markers):**
 
 - `slow` — slow tests (deselect with `-m "not slow"`).
 - `gpu` — tests that require a GPU (deselect on CPU-only machines).
 - `integration` — multi-module integration tests.
+- `heavy` — builds the 1.86 B-param production model; **auto-skipped** in the default run, enabled with `pytest --run-heavy` (CI / GPU pod only).
 
 ---
 
@@ -380,27 +389,36 @@ other way around). All fixed:
 The foundation is the prerequisite for everything else. The remaining work
 falls into 4 phases, each with a clear gate.
 
-### Phase 2: Algorithmic Model Implementation
+### Phase 2: Algorithmic Model Implementation — ✅ SHIPPED (2026-07-16)
 
 **Goal:** Replace every `NotImplementedError_` in `hymo.models` with real
 implementations. After Phase 2, the model can be constructed, forward-passed,
 and loss-computed (but not yet trained at scale).
 
-| Module | What |
-|---|---|
-| `models/rope.py` | `RotaryEmbedding.apply` (cos/sin table + rotation). |
-| `models/gdn.py` | `GatedDeltaNetBlock.forward` via `fla.chunk_gated_delta_rule`. |
-| `models/mla.py` | `MultiHeadLatentAttention.forward` + `MLABlock.forward` (MLA + MoE + residual + norms). |
-| `models/moe.py` | `DeepSeekMoE.forward` (FP32 router, 16+1+top-2, aux-loss-free, EMA bias), `gate_forward`, `update_gate_bias`. |
-| `models/mtp.py` | `MultiTokenPrediction.forward` (depth=2 chained hidden, shared head, gradient through shared embedding). |
-| `models/init.py` | `mup_init` (zero-init keywords + μP-scaled 2D init + embed sqrt init). |
-| `models/fusionllm.py` | `HyMo.forward` (32-layer loop with per-layer use_checkpoint), `forward_with_hidden`. |
+| Module | What | Status |
+|---|---|---|
+| `models/rope.py` | `RotaryEmbedding.apply` (cos/sin table + rotation). | ✅ real |
+| `models/gdn.py` | `GatedDeltaNetBlock.forward` (delta-rule recurrence + gated MLP, `use_rope` toggle). | ✅ real |
+| `models/mla.py` | `MultiHeadLatentAttention.forward` + `MLABlock.forward` (MLA + MoE + residual + norms, MQA-4). | ✅ real |
+| `models/moe.py` | `DeepSeekMoE.forward` (FP32 router, 16+1+top-2, aux-loss-free, EMA bias), `gate_forward`, `update_gate_bias`. | ✅ real |
+| `models/mtp.py` | `MultiTokenPrediction.forward` (depth=2 chained hidden, shared head, weights `[0.3,0.1]`). | ✅ real |
+| `models/init.py` | `mup_init` (zero-init keywords + μP-scaled 2D init + embed sqrt init). | ✅ real |
+| `models/fusionllm.py` | `HyMo.forward` (32-layer loop), `forward_with_hidden`. | ✅ real |
 
-**Gate:** `pytest tests/unit/test_models.py` passes; `HyMo(B=4, T=4096)` runs
-forward and returns `(B, T, vocab_size)` logits; loss decreases over 100 steps
-on a synthetic batch (smoke test).
+**Status:** every `forward` in `hymo.models` is implemented (no
+`NotImplementedError_` placeholders remain). A CPU smoke test runs
+forward+backward on the tiny config and asserts finite grads; the model
+assembles at production scale (~1.13–1.86B params) behind `@pytest.mark.heavy`.
+`mypy --strict src/hymo` and `ruff` are clean; the default `pytest` run passes
+321 tests (17 heavy auto-skipped). See `docs/HyMo-Roadmap.md` "Implementation
+status" for the canonical record.
 
-### Phase 3: Training Infrastructure
+**Gate (met):** `pytest tests/unit/test_models.py` passes; `HyMo(B=4, T=4096)`
+runs forward and returns `(B, T, vocab_size)` logits; loss decreases over 100
+steps on a synthetic batch (smoke test). Production-scale assembly
+(8 MLA + 24 GDN, ~750M active / ~1.86B stored) verified behind `heavy`.
+
+### Phase 3: Training Infrastructure — ⏭ NEXT
 
 **Goal:** Replace every `NotImplementedError_` in `hymo.training`. After
 Phase 3, the trainer can run end-to-end on a 1-GPU setup (full FSDP-2

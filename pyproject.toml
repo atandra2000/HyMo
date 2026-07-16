@@ -128,4 +128,5 @@ markers = [
     "slow: marks tests as slow (deselect with '-m \"not slow\"')",
     "gpu: marks tests that require a GPU (deselect on CPU-only machines)",
     "integration: marks integration tests that touch multiple modules",
+    "heavy: marks tests that build the production HyMo model (1.86 B params; runs on CI / GPU pod, not on M1 Air)",
 ]

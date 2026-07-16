@@ -25,7 +25,7 @@ decomposed into 5 phases, each with its own gate — see
 | Phase | Status | Evidence |
 |---|---|---|
 | 1 — Repository foundation | **Shipped** | `PHASE_1_DELIVERY.md`; commit `f4c64e7` on `main`. 308/308 tests pass, `mypy --strict` clean, `ruff` clean. Every `forward` was a `NotImplementedError_` placeholder. |
-| 2 — Algorithmic model implementation | **Shipped** | Real `forward` logic implemented for every model class (`models/rope.py`, `gdn.py`, `mla.py`, `moe.py`, `mtp.py`, `init.py`, `fusionllm.py`). A smoke test confirms forward+backward is finite on the tiny config; `mypy --strict` + `ruff` clean. 321 tests pass (17 `heavy` skipped by default). See **Phase 2 delivery note** below. |
+| 2 — Algorithmic model implementation | **Completed** ✅ | Real `forward` logic implemented for every model class (`models/rope.py`, `gdn.py`, `mla.py`, `moe.py`, `mtp.py`, `init.py`, `fusionllm.py`). A smoke test confirms forward+backward is finite on the tiny config; `mypy --strict` + `ruff` clean. 321 tests pass (17 `heavy` skipped by default). See **Phase 2 delivery note** below. |
 | 3 — Training infrastructure | **Next** | `hymo.training.{optimizer, scheduler, fsdp, checkpoint, validation, trainer}` placeholders still raise; partition/`build_optimizers` interfaces live. |
 | 4 — Data pipeline + eval + ablations | Pending | `hymo.data.*` + `hymo.eval.harness` + `hymo.ablations` placeholders. |
 | 5 — Deployment + 30B-token run | Pending | All `scripts/runpod_*.sh` etc. to be written. |
@@ -54,10 +54,11 @@ asserts finite grads; the model assembles at the production scale (~1.13–1.86B
 params, **heavy** test) with 8 MLA + 24 GDN layers. Docstrings updated from
 "Phase 1 placeholder" to Phase 2.
 
-**Open next task:** start **Phase 3** (Training Infrastructure). The training
-interfaces already exist from Phase 1 (`partition_parameters`, `goes_to_adamw`,
-`build_optimizers`, `JointWSDScheduler`, `forward_with_hidden`); Phase 3 fills
-in the algorithmic correctness behind them and wires the `Trainer`. Begin with
+**Open next task:** **Phase 3** (Training Infrastructure) is now started on
+branch `phase-3/training-infra`. The training interfaces already exist from
+Phase 1 (`partition_parameters`, `goes_to_adamw`, `build_optimizers`,
+`JointWSDScheduler`, `forward_with_hidden`); Phase 3 fills in the algorithmic
+correctness behind them and wires the `Trainer`. Begin with
 `training/optimizer.py` (`NorMuon` + `CautiousAdamW`) since the partition
 predicate and optimizer construction are already tested on the tiny model.
 

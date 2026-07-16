@@ -389,7 +389,7 @@ other way around). All fixed:
 The foundation is the prerequisite for everything else. The remaining work
 falls into 4 phases, each with a clear gate.
 
-### Phase 2: Algorithmic Model Implementation — ✅ SHIPPED (2026-07-16)
+### Phase 2: Algorithmic Model Implementation — ✅ COMPLETED (2026-07-16)
 
 **Goal:** Replace every `NotImplementedError_` in `hymo.models` with real
 implementations. After Phase 2, the model can be constructed, forward-passed,

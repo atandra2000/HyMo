@@ -1,0 +1,35 @@
+# Python
+__pycache__/
+*.py[cod]
+*.egg-info/
+.eggs/
+build/
+dist/
+.venv/
+venv/
+
+# Test / coverage
+.pytest_cache/
+.coverage
+htmlcov/
+
+# Mypy / ruff
+.mypy_cache/
+.ruff_cache/
+
+# Project artifacts
+data/shards/
+data/tokens/*.bin
+checkpoints/
+logs/
+*.log
+*.tmp
+
+# Editor / OS
+.DS_Store
+.vscode/
+.idea/
+
+# Local secrets
+.env
+.envrc

@@ -1,0 +1,65 @@
+# Tiny HyMo config for tests. Not for production runs.
+# All sizes scaled down to be fast on a CPU.
+model:
+  vocab_size: 1024
+  max_seq_len: 64
+  n_layers: 4                  # 1 MLA + 3 GDN at positions {0, 4, 8, 12} -- wait, 4 layers
+  dim: 64
+  tie_embeddings: true
+  n_heads: 4
+  n_kv_groups: 2
+  q_lora_rank: 16
+  kv_lora_rank: 16
+  head_dim: 32
+  qk_rope_head_dim: 8          # 25% partial-RoPE
+  qk_nope_head_dim: 24
+  v_head_dim: 32
+  gdn_d_state: 8
+  gdn_d_conv: 4
+  gdn_headdim: 16
+  gdn_d_inner: 32
+  gdn_chunk_size: 16
+  nope_hybrid_gdn_enabled: false
+  n_routed_experts: 4
+  n_shared_experts: 1
+  n_activated_experts: 2
+  moe_inter_dim: 64
+  inter_dim: 64
+  mtp_depth: 2
+  mtp_loss_weights: [0.3, 0.1]
+  logit_softcap: 15.0
+  mup_init: true
+
+optimizer:
+  muon_lr: 0.02
+  muon_momentum: 0.95
+  muon_betas: [0.95, 0.95]
+  adamw_lr: 0.0003
+  adamw_betas: [0.9, 0.95]
+  master_weights_dtype: float32
+  cautious_wd: true
+
+scheduler:
+  total_steps: 100
+  warmup_frac: 0.02
+  stable_frac: 0.83
+  decay_frac: 0.15
+  min_lr_ratio: 0.05
+  decay: linear
+
+training:
+  micro_batch_size: 1
+  gradient_accumulation_steps: 1
+  max_seq_len: 64
+  world_size: 1
+  fsdp: false
+  fsdp_mixed_precision: bfloat16
+  grad_clip: 1.0
+  save_interval: 50
+  eval_interval: 25
+  log_interval: 5
+
+run:
+  name: hymo-tiny-test
+  seed: 42
+  output_dir: /tmp/hymo_test

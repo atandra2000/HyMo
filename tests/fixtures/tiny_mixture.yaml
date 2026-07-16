@@ -1,0 +1,30 @@
+# Tiny data config for tests.
+sources:
+  - { id: fineweb_edu_q3, weight: 1.0 }
+
+train_fraction: 0.97
+val_fraction: 0.015
+test_fraction: 0.015
+
+sharding:
+  shard_size_tokens: 10000
+  dtype: uint32
+  target_total_tokens: 1000000
+  output_dir: /tmp/hymo_test/shards
+
+tokenization:
+  name: hymo-bpe-64k-tiny
+  path: /tmp/hymo_test/byte_bpe_vocab.json
+  vocab_size: 1024
+  batch_size: 64
+
+dedup:
+  enabled: false
+  method: sha256
+
+quality:
+  drop_empty: true
+  min_unique_chars_ratio: 0.05
+
+seed: 42
+streaming_download: false

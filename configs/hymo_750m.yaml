@@ -1,0 +1,131 @@
+# HyMo v1.0 primary config (architecture doc §2.1, §2.4, §2.5, §2.8, §3.1, §5.2, §7.1).
+# Source of truth for all hyperparameters. Code reads from this; nothing is hardcoded.
+#
+# To override per-run, derive via:
+#   from dataclasses import replace
+#   from hymo.core.config import load_config
+#   base = load_config("configs/hymo_750m.yaml")
+#   variant = replace(base, run=replace(base.run, name="hymo-debug"))
+
+model:
+  # Token + sequence
+  vocab_size: 64256            # 64000 BPE + 256 bytes
+  max_seq_len: 4096
+  tie_embeddings: true
+
+  # Stack
+  n_layers: 32
+  dim: 896
+
+  # MLA (full attention)
+  n_heads: 16
+  n_kv_groups: 4               # MQA-4 (replaces GQA-1.75)
+  q_lora_rank: 224
+  kv_lora_rank: 128
+  head_dim: 128
+  qk_rope_head_dim: 32         # 25% partial-RoPE
+  qk_nope_head_dim: 96
+  v_head_dim: 128
+  rope_theta: 10000.0
+
+  # GDN (linear attention)
+  gdn_d_state: 32
+  gdn_d_conv: 4
+  gdn_headdim: 32
+  gdn_d_inner: 1280
+  gdn_chunk_size: 64           # swept {32, 64, 128} in v1.1
+
+  # NoPE-hybrid — CR-12 mitigation: v1.0 ships OFF, v1.1 ablation tests it
+  nope_hybrid_gdn_enabled: false
+
+  # MoE
+  n_routed_experts: 16
+  n_shared_experts: 1
+  n_activated_experts: 2
+  moe_inter_dim: 2304
+  moe_ema_alpha: 0.02
+  moe_capacity_factor: 1.5
+
+  # DenseFFN on GDN blocks
+  inter_dim: 2560
+
+  # MTP (depth=2 with chained hidden, weights [0.3, 0.1])
+  mtp_depth: 2
+  mtp_loss_weights: [0.3, 0.1]
+  mtp_inter_dim: 2304
+
+  # Logit softcap (PaLM-style)
+  logit_softcap: 15.0
+
+  # Init
+  mup_init: true
+
+optimizer:
+  # NorMuon (attention + GDN matrices, 2D dense)
+  muon_lr: 0.02
+  muon_momentum: 0.95
+  muon_betas: [0.95, 0.95]
+  muon_eps: 1.0e-8
+  muon_weight_decay: 0.1
+
+  # AdamW (embed/head/norm/gate/scalars + MoE experts)
+  adamw_lr: 3.0e-4
+  adamw_betas: [0.9, 0.95]
+  adamw_eps: 1.0e-8
+  adamw_weight_decay: 0.0
+  adamw_embed_weight_decay: 0.1
+
+  # Master weight precision (FP32 by default; v1.0 quality-first choice)
+  master_weights_dtype: float32
+
+  # Cautious weight decay (Lion-style mask) — 2D weights only
+  cautious_wd: true
+
+scheduler:
+  total_steps: 57220           # 30B tokens / 524,288 per-step tokens
+  warmup_frac: 0.02            # 1,145 steps (v1.0 quality-first)
+  stable_frac: 0.83            # 47,492 steps
+  decay_frac: 0.15             # 8,583 steps
+  min_lr_ratio: 0.05           # deeper decay (v1.0 quality-first)
+  decay: linear
+
+training:
+  # Batch
+  micro_batch_size: 4
+  gradient_accumulation_steps: 8
+  max_seq_len: 4096
+
+  # Distributed
+  world_size: 4
+  fsdp: true
+  fsdp_mixed_precision: bfloat16
+
+  # Gradient handling
+  grad_clip: 1.0
+  grad_norm_threshold: 10.0
+  loss_nan_skip: true
+  consecutive_nan_limit: 5    # MISS-9: abort on 5 consecutive NaN
+  empty_cache_every: 100
+
+  # Checkpoint + eval
+  save_dir: checkpoints/pretrain
+  save_interval: 4000
+  log_interval: 50
+  eval_interval: 2000
+  max_keep: 2                 # last 2 + best
+
+  # Optimizations (architecture doc §12a) — required for 5-7 day wall-clock
+  fused_gdn: true             # H1
+  moe_mixed_precision: true   # H2
+  torch_compile_gdn: true     # H3
+  cuda_graphs_mla: true       # H4
+
+run:
+  name: hymo-v1.0
+  seed: 42
+  output_dir: checkpoints/pretrain
+  log_dir: logs
+  eval_dir: checkpoints/pretrain/eval
+  distributed: true
+  deterministic: true
+  resume_from: null

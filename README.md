@@ -4,8 +4,10 @@ A 750M-active hybrid language model combining **Gated Delta Net** (linear attent
 
 ## Status
 
-- **Phase 1 (Repository Foundation):** in progress — see [docs/HyMo-Design.md](docs/HyMo-Design.md) and [docs/HyMo-Roadmap.md](docs/HyMo-Roadmap.md).
-- **Phase 2+ (Algorithmic implementation):** not started.
+- **Phase 1 (Repository Foundation):** ✅ Shipped — 47 Python files, full public API, frozen config, all interfaces. See [docs/PHASE_1_DELIVERY.md](docs/PHASE_1_DELIVERY.md).
+- **Phase 2 (Algorithmic Model Implementation):** ✅ Completed — every `forward` in `hymo.models` is real (GDN, MLA, MoE, MTP, RoPE, μP init, 32-layer HyMo stack). See [Phase 2 delivery note](docs/HyMo-Roadmap.md#user-content-phase-2-delivery-note-algorithmic-model-implementation).
+- **Phase 3 (Training Infrastructure):** ✅ Completed — `NorMuon`/`CautiousAdamW` with FP32 master weights, `JointWSDScheduler`, real held-out validation, DCP checkpoint save/load, `Trainer` with MTP loss, FSDP-aware grad norm, NaN-skip, EMA gate bias, eval every 2k steps. See [Phase 3 delivery note](docs/HyMo-Roadmap.md#phase-3-delivery-note-training-infrastructure).
+- **Phase 4+ (Data pipeline, eval, deployment):** Pending — see [docs/HyMo-Roadmap.md](docs/HyMo-Roadmap.md).
 
 ## Layout
 

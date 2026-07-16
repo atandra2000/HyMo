@@ -1,45 +1,49 @@
-"""The HyMo training loop (Phase 1 placeholder).
+"""The HyMo training loop (Phase 3 implementation).
 
-The real implementation (architecture doc §7, roadmap C4, D5, D6, D7,
-E3, G2) ties together:
+Ties together:
 
 - :class:`hymo.training.optimizer.build_optimizers` (NorMuon + AdamW).
 - :class:`hymo.training.scheduler.JointWSDScheduler`.
-- :class:`hymo.training.fsdp.wrap_model_with_fsdp` for FSDP-2 wrapping.
 - :class:`hymo.training.checkpoint.save_checkpoint` /
-  :func:`load_checkpoint` for DCP-based save/load.
+  :func:`load_checkpoint`.
 - :class:`hymo.training.validation.compute_validation_loss` for
   real held-out val.
 - :class:`hymo.utils.callbacks.CallbackList` for the event hook.
-
-This placeholder defines the public surface (``Trainer.__init__``,
-``train_step``, ``save``, ``load``, ``train``); the bodies raise
-:class:`NotImplementedError_`.
 """
 
 from __future__ import annotations
 
+import logging
+from collections.abc import Iterable
 from dataclasses import dataclass, field
 from pathlib import Path
 
 import torch
-from torch import nn
+from torch.nn import functional as F
 
 from hymo.core.config import HyMoConfig
-from hymo.core.exceptions import NotImplementedError_
-from hymo.utils.callbacks import CallbackList, TrainerState
+from hymo.models import HyMo
+from hymo.training.checkpoint import (
+    CheckpointState,
+    load_checkpoint,
+    save_checkpoint,
+)
+from hymo.training.optimizer import build_optimizers
+from hymo.training.scheduler import JointWSDScheduler
+from hymo.training.validation import (
+    ValMetrics,
+    compute_validation_loss,
+)
+from hymo.utils.callbacks import CallbackEvent, CallbackList, TrainerState
 
 __all__ = ["Trainer", "TrainerConfig", "train_step_result"]
+
+log = logging.getLogger(__name__)
 
 
 @dataclass
 class TrainerConfig:
-    """Trainer-only config knobs (subset of :class:`TrainingConfig`).
-
-    These are the knobs the Trainer reads directly at runtime. Most
-    training config lives in :class:`hymo.core.config.TrainingConfig`
-    and is passed in via the :class:`HyMoConfig`.
-    """
+    """Trainer-only config knobs (subset of :class:`TrainingConfig`)."""
 
     log_interval: int = 50
     save_interval: int = 4_000
@@ -58,7 +62,7 @@ class train_step_result:
     Attributes
     ----------
     loss : float
-        The cross-entropy loss for this step (after MTP contribution).
+        The cross-entropy loss for this step (after MTP contributions).
     grad_norm : float
         The L2 norm of the gradients (after clip).
     lr_muon : float
@@ -68,7 +72,7 @@ class train_step_result:
     skipped : bool
         True if the step was skipped (NaN-skip).
     metrics : dict
-        Free-form dict for additional metrics.
+        Free-form dict for additional metrics (e.g. MTP losses).
     """
 
     loss: float
@@ -80,15 +84,13 @@ class train_step_result:
 
 
 class Trainer:
-    """The main HyMo training loop (Phase 1 placeholder).
-
-    Architecture doc §7, §13. Phase 1 placeholder.
+    """The main HyMo training loop.
 
     Parameters
     ----------
     config : HyMoConfig
-        The top-level config. The Trainer reads every sub-config.
-    model : nn.Module
+        The top-level config.
+    model : HyMo
         The HyMo model (already constructed and μP-init'd).
     callbacks : CallbackList or None
         Optional callback list.
@@ -97,20 +99,33 @@ class Trainer:
     def __init__(
         self,
         config: HyMoConfig,
-        model: nn.Module,
+        model: HyMo,
         callbacks: CallbackList | None = None,
     ) -> None:
         self._config = config
         self.model = model
-        # Explicit None check: CallbackList implements __len__ and an empty
-        # instance is falsy, so ``callbacks or CallbackList()`` would
-        # silently replace a real (empty) CallbackList with a fresh one.
+
         self.callbacks = callbacks if callbacks is not None else CallbackList()
+
+        self.optimizers = build_optimizers(model, config.optimizer)
+        self.scheduler = JointWSDScheduler(config.scheduler)
+
+        # Store base LRs so the scheduler factor is applied multiplicatively.
+        self._base_lr_muon: float | None = (
+            config.optimizer.muon_lr if self.optimizers.nor_muon else None
+        )
+        self._base_lr_adamw: float = config.optimizer.adamw_lr
+
         # Public state — the callbacks read this via the TrainerState.
         self.step: int = 0
         self.token_count: int = 0
         self.best_loss: float = float("inf")
         self.state = TrainerState()
+
+        if config.model.mtp_depth > 0:
+            self._has_mtp = True
+        else:
+            self._has_mtp = False
 
     # ---- Public API -----------------------------------------------------
 
@@ -121,62 +136,316 @@ class Trainer:
     ) -> train_step_result:
         """Run a single optimizer step.
 
-        Phase 1 placeholder — raises :class:`NotImplementedError_`.
-        The real implementation runs the forward, backward, optimizer
-        step, scheduler step, and returns the metrics.
+        Performs a forward pass, computes the cross-entropy loss
+        (including MTP if applicable), backpropagates, clips gradients,
+        applies the optimizers, and advances the scheduler.
+
+        Parameters
+        ----------
+        tokens : torch.Tensor
+            Input token ids of shape ``(B, T)``.
+        targets : torch.Tensor
+            Target token ids of shape ``(B, T)``.
+
+        Returns
+        -------
+        train_step_result
         """
-        raise NotImplementedError_(
-            "Trainer.train_step is a Phase 1 placeholder; the real "
-            "implementation lands in Phase 3 (design §7, roadmap C4)."
+        self.model.train()
+
+        # ---- forward + loss ----
+        if self._has_mtp:
+            mtp_module = getattr(self.model, "_mtp", None)
+            if mtp_module is not None:
+                logits, mtp_outputs = mtp_module.forward(tokens)
+                # logits are raw (pre-softcap) from forward_with_hidden
+            else:
+                logits = self.model.forward(tokens)
+                mtp_outputs = []
+        else:
+            logits = self.model.forward(tokens)
+            mtp_outputs = []
+
+        V = logits.size(-1)
+
+        main_loss = F.cross_entropy(
+            logits[:, :-1, :].reshape(-1, V),
+            targets[:, :-1].reshape(-1),
+        )
+
+        total_loss = main_loss
+        mtp_details: dict[str, float] = {}
+
+        for i, mtp_out in enumerate(mtp_outputs):
+            mtp_loss = F.cross_entropy(
+                mtp_out.logits.reshape(-1, V),
+                mtp_out.targets.reshape(-1),
+            )
+            weighted = mtp_loss * mtp_out.loss_weight
+            total_loss = total_loss + weighted
+            mtp_details[f"mtp_{i}_loss"] = mtp_loss.item()
+            mtp_details[f"mtp_{i}_weighted"] = weighted.item()
+
+        # ---- NaN-skip check ----
+        if self._config.training.loss_nan_skip and (torch.isnan(total_loss) or torch.isinf(total_loss)):
+            self.model.zero_grad(set_to_none=True)
+            return train_step_result(
+                loss=float("nan"),
+                grad_norm=0.0,
+                lr_muon=self._current_lr_muon(),
+                lr_adamw=self._current_lr_adamw(),
+                skipped=True,
+                metrics={"main_loss": float("nan"), **mtp_details},
+            )
+
+        # ---- backward ----
+        total_loss.backward()  # type: ignore[no-untyped-call]
+
+        # ---- gradient clipping ----
+        grad_norm = torch.nn.utils.clip_grad_norm_(
+            self.model.parameters(),
+            max_norm=self._config.training.grad_clip,
+            norm_type=2.0,
+        )
+        grad_norm_val = grad_norm.item() if isinstance(grad_norm, torch.Tensor) else float(grad_norm)
+
+        # ---- scheduler factor → effective LR ----
+        factor = self.scheduler.get_factor(self.step + 1)
+        if self.optimizers.nor_muon is not None and self._base_lr_muon is not None:
+            for g in self.optimizers.nor_muon.param_groups:
+                g["lr"] = self._base_lr_muon * factor
+        for g in self.optimizers.adamw.param_groups:
+            g["lr"] = self._base_lr_adamw * factor
+
+        # ---- optimizer step ----
+        if self.optimizers.nor_muon is not None:
+            self.optimizers.nor_muon.step()
+        self.optimizers.adamw.step()
+
+        # ---- post-step cleanup ----
+        self.scheduler.step()
+        self.model.zero_grad(set_to_none=True)
+
+        self.step += 1
+        self.token_count += tokens.numel()
+
+        return train_step_result(
+            loss=total_loss.item(),
+            grad_norm=grad_norm_val,
+            lr_muon=self._current_lr_muon(),
+            lr_adamw=self._current_lr_adamw(),
+            skipped=False,
+            metrics={"main_loss": main_loss.item(), **mtp_details},
         )
 
     def save(self, tag: str | None = None) -> Path:
-        """Save a checkpoint.
+        """Save a checkpoint to ``{output_dir}/{tag}/model.pt``.
 
-        Phase 1 placeholder — raises :class:`NotImplementedError_`.
-        The real implementation writes to
-        ``{output_dir}/{tag}/`` via DCP (roadmap D3, D7).
+        Parameters
+        ----------
+        tag : str or None
+            Checkpoint tag (e.g. ``"step_1000"`` or ``"best"``).
+            Defaults to ``f"step_{self.step}"``.
+
+        Returns
+        -------
+        Path
+            The path to the saved checkpoint.
         """
-        raise NotImplementedError_(
-            "Trainer.save is a Phase 1 placeholder; the real "
-            "implementation lands in Phase 3 (design §13.6, roadmap D3)."
+        if tag is None:
+            tag = f"step_{self.step}"
+        output_dir = Path(self._config.run.output_dir)
+        ckpt_dir = output_dir / tag
+        ckpt_path = ckpt_dir / "model.pt"
+
+        state = CheckpointState(
+            step=self.step,
+            token_count=self.token_count,
+            best_loss=self.best_loss,
         )
+
+        save_checkpoint(
+            path=ckpt_path,
+            model=self.model,
+            optimizers=self.optimizers,
+            scheduler=self.scheduler,
+            state=state,
+        )
+
+        log.info("Checkpoint saved to %s (step=%d)", ckpt_path, self.step)
+        return ckpt_path
 
     def load(self, path: str | Path) -> int:
         """Load a checkpoint and resume.
 
-        Phase 1 placeholder — raises :class:`NotImplementedError_`.
-        Returns the step count to resume from.
+        Parameters
+        ----------
+        path : str or Path
+            Path to the checkpoint file (``.pt``) or directory
+            containing ``model.pt``.
+
+        Returns
+        -------
+        int
+            The step count to resume from.
         """
-        raise NotImplementedError_(
-            "Trainer.load is a Phase 1 placeholder; the real "
-            "implementation lands in Phase 3 (design §13.6, roadmap D7)."
+        p = Path(path)
+        if p.is_dir():
+            p = p / "model.pt"
+
+        state = load_checkpoint(
+            path=p,
+            model=self.model,
+            optimizers=self.optimizers,
+            scheduler=self.scheduler,
         )
 
-    def train(self, max_steps: int | None = None) -> None:
+        self.step = state.step
+        self.token_count = state.token_count
+        self.best_loss = state.best_loss
+
+        self.callbacks.dispatch(
+            CallbackEvent.CHECKPOINT_LOAD,
+            self._make_state(),
+        )
+
+        log.info("Checkpoint loaded from %s (step=%d)", p, self.step)
+        return self.step
+
+    def train(
+        self, data_iter: Iterable[tuple[torch.Tensor, torch.Tensor]], max_steps: int | None = None
+    ) -> None:
         """Run the main training loop.
 
-        Phase 1 placeholder — raises :class:`NotImplementedError_`.
+        Parameters
+        ----------
+        data_iter : iterable of (tokens, targets)
+            An iterable yielding ``(tokens, targets)`` tensors of shape
+            ``(B, T)`` each. Typically a :class:`torch.utils.data.DataLoader`.
+        max_steps : int or None
+            Maximum number of optimizer steps. Defaults to the config's
+            ``scheduler.total_steps``.
         """
-        raise NotImplementedError_(
-            "Trainer.train is a Phase 1 placeholder; the real "
-            "implementation lands in Phase 3 (design §7, roadmap C4)."
+        if max_steps is None:
+            max_steps = self._config.scheduler.total_steps
+
+        self.callbacks.dispatch(CallbackEvent.TRAIN_BEGIN, self._make_state())
+
+        for tokens, targets in data_iter:
+            if self.step >= max_steps:
+                break
+
+            self.callbacks.dispatch(CallbackEvent.STEP_BEGIN, self._make_state())
+
+            result = self.train_step(tokens, targets)
+
+            # Update shared state for callbacks.
+            self.state.loss = result.loss
+            self.state.grad_norm = result.grad_norm
+            self.state.lr_muon = result.lr_muon
+            self.state.lr_adamw = result.lr_adamw
+            self.state.metrics = result.metrics
+
+            if (
+                self.step % self._config.training.log_interval == 0
+                and not result.skipped
+            ):
+                log.info(
+                    "step=%d loss=%.4f grad_norm=%.4f lr_muon=%.6f lr_adamw=%.6f",
+                    self.step, result.loss, result.grad_norm,
+                    result.lr_muon, result.lr_adamw,
+                )
+
+            # Validation.
+            if (
+                self._config.training.eval_interval > 0
+                and self.step % self._config.training.eval_interval == 0
+            ):
+                self.callbacks.dispatch(CallbackEvent.EVAL_BEGIN, self._make_state())
+                eval_metrics = self.evaluate()
+                self.state.metrics.update(eval_metrics)
+                if eval_metrics.get("val_loss", float("inf")) < self.best_loss:
+                    self.best_loss = eval_metrics["val_loss"]
+                    self.save(tag="best")
+                self.callbacks.dispatch(CallbackEvent.EVAL_END, self._make_state())
+
+            # Checkpoint save.
+            if (
+                self._config.training.save_interval > 0
+                and self.step % self._config.training.save_interval == 0
+            ):
+                self.callbacks.dispatch(
+                    CallbackEvent.CHECKPOINT_SAVE, self._make_state()
+                )
+                self.save()
+
+            self.callbacks.dispatch(CallbackEvent.STEP_END, self._make_state())
+
+            if self.state.stop_training:
+                break
+
+        self.callbacks.dispatch(CallbackEvent.TRAIN_END, self._make_state())
+
+    def evaluate(self, val_bin_path: str | Path | None = None) -> dict[str, float]:
+        """Run a single validation pass on the held-out ``val.bin``.
+
+        Parameters
+        ----------
+        val_bin_path : str or Path or None
+            Path to the validation binary. Defaults to
+            ``data/tokens/val.bin``.
+
+        Returns
+        -------
+        dict[str, float]
+            With keys ``val_loss`` and ``val_ppl``.
+        """
+        training_cfg = self._config.training
+        model_cfg = self._config.model
+
+        from hymo.training.validation import DEFAULT_VAL_BIN
+
+        metrics: ValMetrics = compute_validation_loss(
+            self.model,
+            batch_size=training_cfg.micro_batch_size,
+            seq_len=training_cfg.max_seq_len,
+            vocab_size=model_cfg.vocab_size,
+            num_batches=min(4, 32),  # quick partial eval by default
+            device=next(self.model.parameters()).device,
+            val_bin_path=Path(val_bin_path) if val_bin_path else DEFAULT_VAL_BIN,
         )
 
-    def evaluate(self) -> dict[str, float]:
-        """Run a single validation pass.
-
-        Phase 1 placeholder — raises :class:`NotImplementedError_`.
-        """
-        raise NotImplementedError_(
-            "Trainer.evaluate is a Phase 1 placeholder; the real "
-            "implementation lands in Phase 3 (design §6.3, roadmap E3)."
+        log.info(
+            "eval step=%d val_loss=%.4f val_ppl=%.4f batches=%d tokens=%d",
+            self.step, metrics.loss, metrics.ppl,
+            metrics.num_batches, metrics.num_tokens,
         )
+
+        return {
+            "val_loss": metrics.loss,
+            "val_ppl": metrics.ppl,
+        }
+
+    # ---- Internal helpers ------------------------------------------------
+
+    def _current_lr_muon(self) -> float:
+        if self.optimizers.nor_muon is not None and len(self.optimizers.nor_muon.param_groups) > 0:
+            return float(self.optimizers.nor_muon.param_groups[0].get("lr", 0.0))
+        return 0.0
+
+    def _current_lr_adamw(self) -> float:
+        if len(self.optimizers.adamw.param_groups) > 0:
+            return float(self.optimizers.adamw.param_groups[0].get("lr", 0.0))
+        return 0.0
 
     def _make_state(self) -> TrainerState:
         """Build a fresh :class:`TrainerState` for callback dispatch."""
         return TrainerState(
             step=self.step,
             token_count=self.token_count,
-            metrics={},
+            loss=self.state.loss,
+            grad_norm=self.state.grad_norm,
+            lr_muon=self._current_lr_muon(),
+            lr_adamw=self._current_lr_adamw(),
+            metrics=dict(self.state.metrics),
         )

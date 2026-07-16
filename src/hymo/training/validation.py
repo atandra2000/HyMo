@@ -1,16 +1,12 @@
-"""Real held-out validation (Phase 1 placeholder).
+"""Real held-out validation (Phase 3 implementation).
 
-The real implementation (architecture doc §6.3, roadmap C6) reads
-batches from ``data/tokens/val.bin`` (450M held-out FineWeb-Edu
-tokens), runs the model in eval mode, and returns the cross-entropy
-loss and perplexity.
-
-This placeholder defines the public surface; the body raises
-:class:`NotImplementedError_`.
+Reads batches from ``data/tokens/val.bin``, runs the model in eval
+mode, and returns the cross-entropy loss and perplexity.
 """
 
 from __future__ import annotations
 
+import math
 from dataclasses import dataclass
 from pathlib import Path
 
@@ -18,8 +14,9 @@ import numpy as np
 import numpy.typing as npt
 import torch
 from torch import nn
+from torch.nn import functional as F
 
-from hymo.core.exceptions import NotImplementedError_
+from hymo.core.exceptions import DataError
 
 __all__ = ["get_val_batch", "compute_validation_loss", "ValMetrics"]
 
@@ -61,8 +58,6 @@ def _load_val_tokens(path: Path = DEFAULT_VAL_BIN) -> npt.NDArray[np.uint32]:
     global _val_cache, _val_cache_path
     if _val_cache is None or _val_cache_path != path:
         if not path.exists():
-            from hymo.core.exceptions import DataError
-
             raise DataError(
                 f"Validation binary not found: {path}. "
                 f"Run the data prep pipeline first (Phase 4, roadmap A7)."
@@ -81,13 +76,22 @@ def get_val_batch(
 ) -> tuple[torch.Tensor, torch.Tensor]:
     """Slice a deterministic (tokens, targets) window from ``val.bin``.
 
-    Phase 1 placeholder — returns empty tensors; the real
-    implementation lands in Phase 3 (design §6.3, roadmap C6).
+    Deterministic across runs: uses ``seed`` to compute a fixed offset
+    into the token array, then slices ``B * (T + 1)`` tokens to produce
+    the ``(B, T)`` input and ``(B, T)`` target (shifted by 1).
     """
-    raise NotImplementedError_(
-        "get_val_batch is a Phase 1 placeholder; the real "
-        "implementation lands in Phase 3 (design §6.3, roadmap C6)."
-    )
+    tokens_np = _load_val_tokens(path)
+    total_tokens = batch_size * (seq_len + 1)
+
+    offset = (seed * 7919) % (len(tokens_np) - total_tokens - 1)
+    chunk_np = tokens_np[offset: offset + total_tokens].astype(np.int64)
+
+    chunk_t = torch.from_numpy(chunk_np).to(device=device)
+    chunk_t = chunk_t.view(batch_size, seq_len + 1)
+
+    x = chunk_t[:, :seq_len].contiguous()
+    y = chunk_t[:, 1:seq_len + 1].contiguous()
+    return x, y
 
 
 def compute_validation_loss(
@@ -103,9 +107,42 @@ def compute_validation_loss(
 ) -> ValMetrics:
     """Run ``num_batches`` validation batches and return the metrics.
 
-    Phase 1 placeholder — raises :class:`NotImplementedError_`.
+    Iterates ``num_batches`` deterministic windows from ``val.bin``,
+    runs the model in ``eval()`` mode, computes CE loss, and returns
+    aggregated :class:`ValMetrics`.
     """
-    raise NotImplementedError_(
-        "compute_validation_loss is a Phase 1 placeholder; the real "
-        "implementation lands in Phase 3 (design §6.3, roadmap C6)."
+    was_training = model.training
+    model.eval()
+
+    total_loss = 0.0
+    total_tokens = 0
+
+    with torch.no_grad():
+        for i in range(num_batches):
+            batch_seed = seed + i * 131
+            tokens, targets = get_val_batch(
+                batch_size=batch_size,
+                seq_len=seq_len,
+                device=device,
+                seed=batch_seed,
+                path=val_bin_path,
+            )
+            logits = model(tokens)
+            loss = F.cross_entropy(
+                logits.view(-1, vocab_size),
+                targets.view(-1),
+            )
+            n = targets.numel()
+            total_loss += loss.item() * n
+            total_tokens += n
+
+    if was_training:
+        model.train()
+
+    mean_loss = total_loss / max(total_tokens, 1)
+    return ValMetrics(
+        loss=mean_loss,
+        ppl=math.exp(mean_loss),
+        num_batches=num_batches,
+        num_tokens=total_tokens,
     )

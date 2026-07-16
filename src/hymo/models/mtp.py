@@ -77,7 +77,10 @@ class MultiTokenPrediction(nn.Module):
         self.mtp_inter_dim = config.mtp_inter_dim
         self.mtp_loss_weights = tuple(config.mtp_loss_weights)
         self._config = config
-        self._main_model = main_model
+        # Store via object.__setattr__ to avoid PyTorch registering
+        # _main_model as a child module (which would create a circular
+        # reference and infinite recursion in .train() / .eval()).
+        object.__setattr__(self, "_main_model", main_model)
 
         # One MTP module per head (the chained hidden architecture).
         # Each head is a small SwiGLU that fuses the previous hidden

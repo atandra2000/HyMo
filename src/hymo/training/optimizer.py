@@ -1,6 +1,4 @@
-"""Dual optimizer: NorMuon + AdamW (Phase 1 placeholders).
-
-The real implementation (architecture doc §5.2, roadmap C1, C2) has:
+"""Dual optimizer: NorMuon + AdamW (Phase 3 implementation).
 
 - :class:`NorMuon` — the NorMuon optimizer (arXiv 2510.05491) for
   2D dense weights. Newton-Schulz orthogonalization + row-wise RMS
@@ -8,14 +6,12 @@ The real implementation (architecture doc §5.2, roadmap C1, C2) has:
 - :class:`CautiousAdamW` — AdamW with the same cautious mask; FP32
   master weights; β2 = 0.95 (the 2026 norm for small LLM training).
 
-Both are subclasses of :class:`torch.optim.Optimizer`. The phase-1
-placeholders are real subclasses (so the partition test can construct
-them and verify the API) but ``step`` raises
-:class:`hymo.core.exceptions.NotImplementedError_`.
+Both are subclasses of :class:`torch.optim.Optimizer`.
 """
 
 from __future__ import annotations
 
+import math
 from collections.abc import Iterable
 from typing import Any
 
@@ -24,16 +20,44 @@ from torch import nn
 from torch.optim import Optimizer
 
 from hymo.core.config import OptimizerConfig
-from hymo.core.exceptions import NotImplementedError_
 
 __all__ = ["NorMuon", "CautiousAdamW", "build_optimizers", "Optimizers"]
 
+# ---------------------------------------------------------------------------
+# Newton-Schulz helper (pure torch, no extra deps)
+# ---------------------------------------------------------------------------
+
+
+@torch.no_grad()
+def _newton_schulz_orthogonalize(
+    g: torch.Tensor, iterations: int = 5
+) -> torch.Tensor:
+    """Newton-Schulz iterative orthogonalization.
+
+    Approximates the matrix sign function of ``g @ g.T``.
+    Normalises first so the iterates stay bounded.
+    """
+    norm = g.norm()
+    if norm < 1e-12:
+        return g
+    g = g / norm
+    for _ in range(iterations):
+        g = 1.5 * g - 0.5 * g @ g.T @ g
+    return g * norm  # type: ignore[no-any-return]
+
+
+# ---------------------------------------------------------------------------
+# NorMuon
+# ---------------------------------------------------------------------------
+
 
 class NorMuon(Optimizer):
-    """NorMuon optimizer (placeholder).
+    """NorMuon optimizer with FP32 master weights.
 
-    Architecture doc §5.2. Phase 1 placeholder — the ``step`` method
-    raises :class:`NotImplementedError_`.
+    Architecture doc §5.2. Implemented per arXiv 2510.05491:
+    - Newton-Schulz orthogonalization of momentum buffer.
+    - Row-wise RMS normalisation of the update.
+    - Cautious weight decay (Lion-style mask).
 
     Defaults: lr=0.02, momentum=0.95, betas=(0.95, 0.95), eps=1e-8,
     weight_decay=0.1, cautious_wd=True.
@@ -48,6 +72,7 @@ class NorMuon(Optimizer):
         eps: float = 1e-8,
         weight_decay: float = 0.1,
         cautious_wd: bool = True,
+        ns_iterations: int = 5,
     ) -> None:
         if lr <= 0:
             raise ValueError(f"lr must be > 0, got {lr}")
@@ -60,22 +85,71 @@ class NorMuon(Optimizer):
             "eps": eps,
             "weight_decay": weight_decay,
             "cautious_wd": cautious_wd,
+            "ns_iterations": ns_iterations,
         }
         super().__init__(params, defaults)
 
     @torch.no_grad()
-    def step(self, closure: Any = None) -> None:  # type: ignore[override]
-        raise NotImplementedError_(
-            "NorMuon.step is a Phase 1 placeholder; the real "
-            "implementation lands in Phase 3 (design §5.2, roadmap C2)."
-        )
+    def step(self, closure: Any = None) -> torch.Tensor | None:  # type: ignore[override]
+        loss = None
+        if closure is not None:
+            with torch.enable_grad():
+                loss = closure()
+
+        for group in self.param_groups:
+            lr = group["lr"]
+            beta = group["betas"][0]
+            eps = group["eps"]
+            wd = group["weight_decay"]
+            cautious = group["cautious_wd"]
+            ns_iter = group["ns_iterations"]
+
+            for p in group["params"]:
+                if p.grad is None:
+                    continue
+                grad = p.grad
+
+                state = self.state[p]
+
+                if len(state) == 0:
+                    state["momentum_buffer"] = torch.zeros_like(p)
+                    state["master_weight"] = p.data.clone()
+
+                buf = state["momentum_buffer"]
+                master = state["master_weight"]
+
+                if wd != 0:
+                    if cautious:
+                        mask = (grad * master) > 0
+                        master.mul_(1.0 - lr * wd * mask.to(master.dtype))
+                    else:
+                        master.mul_(1.0 - lr * wd)
+
+                buf.mul_(beta).add_(grad, alpha=1.0 - beta)
+
+                update = _newton_schulz_orthogonalize(buf, ns_iter)
+
+                row_norms = update.norm(dim=1, keepdim=True)
+                rms = row_norms / math.sqrt(update.size(1))
+                scale = rms.clamp(min=eps)
+                update = update / scale
+
+                master.add_(update, alpha=-lr)
+                p.data.copy_(master.to(p.dtype))
+        return loss
+
+
+# ---------------------------------------------------------------------------
+# CautiousAdamW
+# ---------------------------------------------------------------------------
 
 
 class CautiousAdamW(Optimizer):
-    """AdamW with cautious weight decay and FP32 master weights (placeholder).
+    """AdamW with cautious weight decay and FP32 master weights.
 
-    Architecture doc §5.2. Phase 1 placeholder — the ``step`` method
-    raises :class:`NotImplementedError_`.
+    Architecture doc §5.2. Standard AdamW with β1=0.9, β2=0.95 and
+    a Lion-style cautious decay mask. FP32 master weights prevent
+    precision drift in mixed-precision training.
 
     Defaults: lr=3e-4, betas=(0.9, 0.95), eps=1e-8, weight_decay=0.0
     (most params; embed/head use 0.1), cautious_wd=False.
@@ -102,11 +176,57 @@ class CautiousAdamW(Optimizer):
         super().__init__(params, defaults)
 
     @torch.no_grad()
-    def step(self, closure: Any = None) -> None:  # type: ignore[override]
-        raise NotImplementedError_(
-            "CautiousAdamW.step is a Phase 1 placeholder; the real "
-            "implementation lands in Phase 3 (design §5.2, roadmap C2)."
-        )
+    def step(self, closure: Any = None) -> torch.Tensor | None:  # type: ignore[override]
+        loss = None
+        if closure is not None:
+            with torch.enable_grad():
+                loss = closure()
+
+        for group in self.param_groups:
+            lr = group["lr"]
+            beta1, beta2 = group["betas"]
+            eps = group["eps"]
+            wd = group["weight_decay"]
+            cautious = group["cautious_wd"]
+
+            for p in group["params"]:
+                if p.grad is None:
+                    continue
+                grad = p.grad
+
+                state = self.state[p]
+
+                if len(state) == 0:
+                    state["step"] = 0
+                    state["exp_avg"] = torch.zeros_like(p)
+                    state["exp_avg_sq"] = torch.zeros_like(p)
+                    state["master_weight"] = p.data.clone()
+
+                state["step"] += 1
+                exp_avg = state["exp_avg"]
+                exp_avg_sq = state["exp_avg_sq"]
+                master = state["master_weight"]
+                step_t = state["step"]
+
+                exp_avg.mul_(beta1).add_(grad, alpha=1.0 - beta1)
+                exp_avg_sq.mul_(beta2).addcmul_(grad, grad, value=1.0 - beta2)
+
+                bias_corr1 = 1.0 - beta1 ** step_t
+                bias_corr2 = 1.0 - beta2 ** step_t
+
+                denom = (exp_avg_sq.sqrt() / math.sqrt(bias_corr2)).add_(eps)
+
+                if wd != 0:
+                    if cautious:
+                        mask = (grad * master) > 0
+                        master.mul_(1.0 - lr * wd * mask.to(master.dtype))
+                    else:
+                        master.mul_(1.0 - lr * wd)
+
+                step_size = lr / bias_corr1
+                master.addcdiv_(exp_avg, denom, value=-step_size)
+                p.data.copy_(master.to(p.dtype))
+        return loss
 
 
 # ----------------------------------------------------------------------

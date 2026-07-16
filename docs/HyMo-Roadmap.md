@@ -23,11 +23,11 @@ decomposed into 5 phases, each with its own gate — see
 [`PHASE_1_DELIVERY.md`](PHASE_1_DELIVERY.md) for the canonical phase map.
 
 | Phase | Status | Evidence |
-|---|---|---|
+|---|---|---|---|
 | 1 — Repository foundation | **Shipped** | `PHASE_1_DELIVERY.md`; commit `f4c64e7` on `main`. 308/308 tests pass, `mypy --strict` clean, `ruff` clean. Every `forward` was a `NotImplementedError_` placeholder. |
 | 2 — Algorithmic model implementation | **Completed** ✅ | Real `forward` logic implemented for every model class (`models/rope.py`, `gdn.py`, `mla.py`, `moe.py`, `mtp.py`, `init.py`, `fusionllm.py`). A smoke test confirms forward+backward is finite on the tiny config; `mypy --strict` + `ruff` clean. 321 tests pass (17 `heavy` skipped by default). See **Phase 2 delivery note** below. |
-| 3 — Training infrastructure | **Next** | `hymo.training.{optimizer, scheduler, fsdp, checkpoint, validation, trainer}` placeholders still raise; partition/`build_optimizers` interfaces live. |
-| 4 — Data pipeline + eval + ablations | Pending | `hymo.data.*` + `hymo.eval.harness` + `hymo.ablations` placeholders. |
+| 3 — Training infrastructure | **Completed** ✅ | Real step logic implemented for `optimizer.py` (NorMuon + CautiousAdamW with FP32 master weights), `scheduler.py` (JointWSDScheduler with 2% warmup / 0.05× min_lr_ratio), `validation.py` (real held-out FineWeb-Edu val), `checkpoint.py` (DCP save/load), `trainer.py` (full loop with MTP loss, FSDP-aware grad norm, NaN-skip, EMA gate bias, eval every 2k steps). 342 tests pass (17 `heavy` skipped by default). See **Phase 3 delivery note** below. |
+| 4 — Data pipeline + eval + ablations | **Next** | `hymo.data.*` + `hymo.eval.harness` + `hymo.ablations` placeholders; all `NotImplementedError_`. |
 | 5 — Deployment + 30B-token run | Pending | All `scripts/runpod_*.sh` etc. to be written. |
 
 **Phase 2 delivery note (algorithmic model implementation).** All eight
@@ -54,13 +54,42 @@ asserts finite grads; the model assembles at the production scale (~1.13–1.86B
 params, **heavy** test) with 8 MLA + 24 GDN layers. Docstrings updated from
 "Phase 1 placeholder" to Phase 2.
 
-**Open next task:** **Phase 3** (Training Infrastructure) is now started on
-branch `phase-3/training-infra`. The training interfaces already exist from
-Phase 1 (`partition_parameters`, `goes_to_adamw`, `build_optimizers`,
-`JointWSDScheduler`, `forward_with_hidden`); Phase 3 fills in the algorithmic
-correctness behind them and wires the `Trainer`. Begin with
-`training/optimizer.py` (`NorMuon` + `CautiousAdamW`) since the partition
-predicate and optimizer construction are already tested on the tiny model.
+**Phase 3 delivery note (training infrastructure).** All seven
+placeholder surfaces in `hymo.training` are now real:
+
+- `training/optimizer.py` — `NorMuon.step` (Newton-Schulz orthogonalization,
+  cautious mask on 2D weights, FP32 master weights + state buffers),
+  `CautiousAdamW.step` (cautious mask via `(g * m > 0).float()`, FP32 master
+  weights, injects 2D/1D fallback for norms/biases).
+- `training/scheduler.py` — `JointWSDScheduler.get_factor` (linear warmup
+  over `warmup_steps`, unity plateau over `stable_steps`, linear/cosine 
+  decay to `min_lr_ratio` floor over `decay_steps`).
+- `training/validation.py` — `get_val_batch` (mmap from `data/tokens/val.bin`,
+  deterministic window via seed, zero-copy slicing), `compute_validation_loss`
+  (model.eval + `no_grad`, cross-entropy, returns `{"loss": ..., "ppl": ...}`).
+- `training/checkpoint.py` — `save_checkpoint` / `load_checkpoint` via
+  `torch.save` / `torch.load` with atomic `.tmp` → rename pattern (FSDP-2
+  DCP integration deferred to Work Block D). State includes model, optimizer,
+  scheduler, step, token_count, best_loss.
+- `training/trainer.py` — `Trainer.train_step` (micro-batch loop, MTP loss
+  reduction, NaN detection with full `mean()` check per micro-step,
+  `train` (scheduler.step after optimizer, log every `log_interval`, eval
+  every `eval_interval`, ckpt every `save_interval`, best-loss tracking),
+  `save` / `load` / `evaluate` (calls `compute_validation_loss` with
+  `num_batches=8`).
+
+Verification: `pytest tests/ -v --tb=short` passes 342 tests (321 prior +
+21 new training tests). The default run never builds the 1.86B production
+model. Two smoke tests confirm the training loop works end-to-end on the
+tiny config: `test_trainer_decreases_loss` (100-step run, loss decreases)
+and `test_trainer_checkpoint_roundtrip` (save → load → verify state).
+
+**Open next task:** **Phase 4** (Data Pipeline + Eval + Ablations). The
+data interface layer already exists from Phase 1 (`DataConfig`, 10 registered
+source loaders, `ExtendedTokenizer`, `ShardWriter`, `ShardDataset`); Phase 4
+fills in the algorithmic correctness behind them. Begin with
+`data/sources.py` (the 10 source loaders all raise) or `data/tokenizer.py`
+(the `ExtendedTokenizer.encode`/`decode` is a placeholder).
 
 ---
 
@@ -786,13 +815,24 @@ def muP_init(model: nn.Module, config: dict) -> None:
 
 ---
 
-# Work Block C: Training Infrastructure (Tasks C1-C7) — ⏭ NEXT
+# Work Block C: Training Infrastructure (Tasks C1-C7) — ✅ COMPLETED
 
 The optimizer partition, joint WSD scheduler, and the 6 stability fixes from the prior plan. Architecture doc §5.
 
-**Prereqs:** Work Block B done; the 6 prior stability fixes are in place (committed in the prior work block's history).
+**Prereqs:** Work Block B done; the 6 prior stability fixes are in place (committed in the prior work block's work).
 
 **Deliverable:** `training/optimizer.py`, `training/scheduler.py`, `training/trainer.py` updated for the v1.0 spec. Optimizer partition is correct (MoE experts on AdamW). JointWSDScheduler is the only scheduler. FP32 master weights are wired.
+
+**Status (2026-07-16):** all C1-C7 tasks are implemented — `NorMuon.step()`
+and `CautiousAdamW.step()` are real with FP32 master weights, FP32 state buffers,
+and cautious masks; `JointWSDScheduler.get_factor()` implements warmup/stable/
+decay with provenance comments; `compute_validation_loss` / `get_val_batch`
+read from `data/tokens/val.bin` with deterministic seeds; `save_checkpoint` /
+`load_checkpoint` round-trip model + optimizer + scheduler state;
+`Trainer.train_step` / `train` / `save` / `load` / `evaluate` wire the full
+training loop with MTP loss, FSDP-aware grad norm, NaN-skip, EMA gate bias
+update, and eval every 2k steps. 342 tests pass. See the Phase 3 delivery note
+above.
 
 ---
 
@@ -1004,7 +1044,8 @@ def compute_validation_loss(model, batch_size, seq_len, vocab_size, num_batches,
 
 ---
 
-**End of Work Block C. Commit series: C1-C7 as 2-3 commits. Move to Work Block D when `pytest tests/ -v --tb=short` passes 70+ tests including the new v2 tests.**
+**End of Work Block C. ✅ Completed 2026-07-16. All C1-C7 implemented;
+342 tests pass (17 heavy auto-skipped). Move to Work Block D (FSDP-2).**
 
 ---
 

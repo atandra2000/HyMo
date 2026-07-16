@@ -83,6 +83,10 @@ def goes_to_adamw(name: str, param: nn.Parameter) -> bool:
     if param.ndim < 2:
         return True
 
+    # 3D+ → AdamW (conv kernels, etc. — NorMuon is for 2D matrices only).
+    if param.ndim > 2:
+        return True
+
     # Tied embed / head.
     if name.endswith("embed.weight") or name.endswith("head.weight"):
         return True

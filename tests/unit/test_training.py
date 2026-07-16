@@ -7,7 +7,6 @@ import torch
 from torch import nn
 
 from hymo.core.config import load_config
-from hymo.core.exceptions import NotImplementedError_
 from hymo.models import HyMo
 from hymo.training import (
     CautiousAdamW,
@@ -216,7 +215,7 @@ class TestPartitionParameters:
 
 
 # ----------------------------------------------------------------------
-# Optimizer placeholders
+# Optimizers
 # ----------------------------------------------------------------------
 
 
@@ -238,12 +237,26 @@ class TestNorMuon:
         with pytest.raises(ValueError):
             NorMuon([p], momentum=1.0)
 
-    def test_step_raises_not_implemented(self) -> None:
+    def test_step_updates_params(self) -> None:
+        p = torch.nn.Parameter(torch.randn(10, 10))
+        p.grad = torch.randn_like(p)
+        orig = p.data.clone()
+        opt = NorMuon([p])
+        opt.step()
+        # Parameters should have changed (and not be NaN).
+        assert not torch.equal(p.data, orig)
+        assert torch.isfinite(p.data).all()
+        # Step does not zero grads; that's the caller's job.
+        assert p.grad is not None
+
+    def test_step_preserves_fp32_master(self) -> None:
         p = torch.nn.Parameter(torch.randn(10, 10))
         p.grad = torch.randn_like(p)
         opt = NorMuon([p])
-        with pytest.raises(NotImplementedError_):
-            opt.step()
+        opt.step()
+        state = opt.state[p]
+        assert "master_weight" in state
+        assert state["master_weight"].dtype == torch.float32
 
 
 class TestCautiousAdamW:
@@ -259,12 +272,23 @@ class TestCautiousAdamW:
         with pytest.raises(ValueError):
             CautiousAdamW([p], lr=0)
 
-    def test_step_raises_not_implemented(self) -> None:
+    def test_step_updates_params(self) -> None:
+        p = torch.nn.Parameter(torch.randn(10, 10))
+        p.grad = torch.randn_like(p)
+        orig = p.data.clone()
+        opt = CautiousAdamW([p])
+        opt.step()
+        assert not torch.equal(p.data, orig)
+        assert torch.isfinite(p.data).all()
+
+    def test_step_preserves_fp32_master(self) -> None:
         p = torch.nn.Parameter(torch.randn(10, 10))
         p.grad = torch.randn_like(p)
         opt = CautiousAdamW([p])
-        with pytest.raises(NotImplementedError_):
-            opt.step()
+        opt.step()
+        state = opt.state[p]
+        assert "master_weight" in state
+        assert state["master_weight"].dtype == torch.float32
 
 
 # ----------------------------------------------------------------------
@@ -338,12 +362,38 @@ class TestJointWSDScheduler:
         assert s.min_lr_ratio == cfg.min_lr_ratio
         assert s.decay_kind == "linear"
 
-    def test_get_factor_raises(self) -> None:
+    def test_get_factor_warmup(self) -> None:
         from hymo.core.config import SchedulerConfig
 
         s = JointWSDScheduler(SchedulerConfig())
-        with pytest.raises(NotImplementedError_):
-            s.get_factor(0)
+        assert s.get_factor(0) == 0.0  # step 0 → factor 0
+        warmup = s.warmup_steps
+        mid_warmup = warmup // 2
+        f_mid = s.get_factor(mid_warmup)
+        assert 0.0 < f_mid < 1.0
+        assert s.get_factor(warmup) == pytest.approx(1.0, abs=1e-6)
+
+    def test_get_factor_stable(self) -> None:
+        from hymo.core.config import SchedulerConfig
+
+        s = JointWSDScheduler(SchedulerConfig())
+        stable_start = s.warmup_steps
+        stable_end = stable_start + s.stable_steps
+        assert s.get_factor(stable_start) == pytest.approx(1.0, abs=1e-6)
+        mid_stable = (stable_start + stable_end) // 2
+        assert s.get_factor(mid_stable) == pytest.approx(1.0, abs=1e-6)
+
+    def test_get_factor_decay(self) -> None:
+        from hymo.core.config import SchedulerConfig
+
+        s = JointWSDScheduler(SchedulerConfig())
+        decay_start = s.warmup_steps + s.stable_steps
+        total = decay_start + s.decay_steps
+        factor_end = s.get_factor(total + 100)  # past end
+        assert factor_end == pytest.approx(s.min_lr_ratio, abs=1e-6)
+        mid_decay = decay_start + s.decay_steps // 2
+        f_mid = s.get_factor(mid_decay)
+        assert s.min_lr_ratio < f_mid < 1.0
 
     def test_decay_factor_linear(self) -> None:
         from hymo.core.config import SchedulerConfig
@@ -387,9 +437,17 @@ class TestJointWSDScheduler:
         with pytest.raises(ValueError):
             s._decay_factor(0.5, "exponential")  # type: ignore[arg-type]
 
-    def test_state_dict(self) -> None:
+    def test_state_dict_and_step(self) -> None:
         from hymo.core.config import SchedulerConfig
 
         s = JointWSDScheduler(SchedulerConfig())
         sd = s.state_dict()
         assert "step" in sd
+        assert sd["step"] == 0
+        s.step()
+        sd2 = s.state_dict()
+        assert sd2["step"] == 1
+        # Round-trip.
+        s2 = JointWSDScheduler(SchedulerConfig())
+        s2.load_state_dict(sd2)
+        assert s2.state_dict()["step"] == 1

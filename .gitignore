@@ -52,3 +52,6 @@ results/
 
 # User personal documentation
 learning_docs/
+
+# Design docs (tracked separately)
+docs/

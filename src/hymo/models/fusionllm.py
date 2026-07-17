@@ -8,6 +8,7 @@ from __future__ import annotations
 
 import torch
 from torch import nn
+from torch.utils.checkpoint import checkpoint
 
 from hymo.core.config import HyMoConfig, ModelConfig
 from hymo.models.gdn import GatedDeltaNetBlock
@@ -72,7 +73,7 @@ class HyMo(nn.Module):
         for layer in self.layers:
             use_cp = getattr(layer, "use_checkpoint", False)
             if use_cp and self.training:
-                x = torch.utils.checkpoint.checkpoint(layer, x, use_reentrant=False)
+                x = checkpoint(layer, x, use_reentrant=False)
             else:
                 x = layer(x)
         return x

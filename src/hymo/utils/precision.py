@@ -2,7 +2,7 @@
 
 from __future__ import annotations
 
-from collections.abc import Iterator
+from collections.abc import Generator
 from contextlib import contextmanager
 
 import torch
@@ -36,7 +36,7 @@ def resolve_dtype(name: str) -> DType:
 
 
 @contextmanager
-def autocast_disabled() -> Iterator[None]:
+def autocast_disabled() -> Generator[None, None, None]:
     """Disable autocast context temporarily."""
     with torch.no_grad():
         if torch.cuda.is_available():
@@ -47,7 +47,7 @@ def autocast_disabled() -> Iterator[None]:
 
 
 @contextmanager
-def bf16_forward() -> Iterator[None]:
+def bf16_forward() -> Generator[None, None, None]:
     """Execute forward pass under bfloat16 autocast context."""
     if torch.cuda.is_available():
         with torch.amp.autocast(device_type="cuda", dtype=torch.bfloat16):
@@ -57,6 +57,6 @@ def bf16_forward() -> Iterator[None]:
 
 
 @contextmanager
-def fp32_master_weights() -> Iterator[None]:
+def fp32_master_weights() -> Generator[None, None, None]:
     """Execute context for FP32 master weight updates."""
     yield

@@ -31,9 +31,9 @@ Built to be pre-trained natively on 30B tokens at 40× params-in-tokens ratio.
 ## ✨ Key Features
 
 - 🏗️ **Architectural Innovation**: Asymmetric feed-forward design combining dense layers with sparse experts (MoE).
-- ⚡ **Optimized Kernels**: Integrated with `fla` for heavily optimized GDN kernels.
-- 🏋️ **Advanced Training Stack**: Features `NorMuon` + `CautiousAdamW` dual-optimizer routing, FSDP-aware implementations, and `JointWSDScheduler`.
-- 📊 **Robust Data Pipeline**: Natively handles 10 data sources with a BPE-64k + byte-level fallback tokenizer and streaming `uint32` sharding.
+- ⚡ **Optimized Kernels**: Integrated with custom `Triton` kernels for heavily optimized GDN recurrence (fallback to `fla` or native PyTorch).
+- 🏋️ **Advanced Training Stack**: Features full **FSDP-2** parameter sharding, **Gradient Accumulation**, `torch.compile` graph optimization, `NorMuon` + `CautiousAdamW` dual-optimizer routing, and `JointWSDScheduler`.
+- 📊 **Robust Data Pipeline**: Natively handles 10 data sources with a BPE-64k tokenizer, zero-copy `np.memmap` lazy loading, and persistent prefetched multi-processing to keep A100 GPUs saturated.
 - 🧪 **Cool-by-Design Testing**: Our test suite dynamically mocks the 1.86B model with a tiny 760K-param surrogate so tests run lightning fast on laptops without GPUs (M1 friendly!).
 
 ---
@@ -42,17 +42,17 @@ Built to be pre-trained natively on 30B tokens at 40× params-in-tokens ratio.
 
 Requires Python 3.10+.
 
-Clone the repository and install in editable mode with development and training extras:
+Clone the repository and use `uv` to install in editable mode with development and training extras:
 
 ```bash
 git clone https://github.com/your-username/hymo.git
 cd hymo
 
 # Install core + train + dev dependencies
-pip install -e ".[dev,train]"
+uv sync --all-extras
 ```
 
-> **Note:** The `train` extra includes `fla` (for GDN operations) and `lm-eval` (for harness evaluation). 
+> **Note:** The `train` extra includes `triton` (for our custom GDN kernels) and `lm-eval` (for harness evaluation). 
 
 ---
 

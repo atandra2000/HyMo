@@ -114,6 +114,7 @@ class GatedDeltaNetBlock(nn.Module):
         o = torch.stack(o_list, dim=1)
         return o.to(v.dtype)
 
+    @torch.compile(mode="reduce-overhead")
     def forward(self, x: torch.Tensor) -> torch.Tensor:
         """Forward pass for the GDN block mapping (B, T, d_model) -> (B, T, d_model)."""
         B, T, _ = x.shape
@@ -134,8 +135,10 @@ class GatedDeltaNetBlock(nn.Module):
         g_in = self.g_proj(v)
         b = b_in.view(B, T, H, S)
         c = c_in.view(B, T, H, S)
-        dt = F.sigmoid(dt_in + self.dt_bias)
+        # g_in is (B, T, d_inner) = (B, T, H*D)
+        # Triton kernel and pure-PyTorch fallback both expect per-head scalar gate (B, T, H)
         g = F.sigmoid(g_in)
+        g_gate = g.view(B, T, H, D).mean(dim=-1)     # (B, T, H) — scalar gate per head
 
         # 4. RoPE on the first 25% of v
         v = v.view(B, T, H, D)
@@ -146,16 +149,21 @@ class GatedDeltaNetBlock(nn.Module):
             v_for_rope = v_for_rope.permute(0, 2, 1, 3)
             v = torch.cat([v_for_rope, v[..., rope_dim:]], dim=-1)
 
-        # 5. Gated delta rule (prefers Triton chunk_gated_delta_rule, otherwise falls back)
+        # 5. Gated delta rule (prefers fla, then custom Triton, otherwise pure-PyTorch)
         try:
             from fla.layers.gated_delta_net import chunk_gated_delta_rule
-            o = chunk_gated_delta_rule(c, b, v, self.A_log, dt, g, self.chunk_size)
+            o = chunk_gated_delta_rule(c, b, v, self.A_log, dt_in, g_gate, self.chunk_size)
         except ImportError:
-            o = self._gated_delta_rule(v, b, c, dt)
+            try:
+                from hymo.models.gdn_triton import triton_gated_delta_rule
+                o = triton_gated_delta_rule(v, b, c, g_gate, self.A_log)
+            except ImportError:
+                o = self._gated_delta_rule(v, b, c, g_gate)
 
-        # 6. Apply skip connection and gates
+        # 6. Apply skip connection: D (per-head scalar) + element-wise gate over d_inner
         o = o + self.D.view(1, 1, H, 1) * v
-        o = o * g.view(B, T, H, D)
+        # Gate is applied per-head, broadcast over D
+        o = o * g_gate.unsqueeze(-1)              # (B, T, H, 1) → broadcasts over D
 
         # 7. Output projection and residual skip
         o_flat = o.view(B, T, d_inner)

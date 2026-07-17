@@ -5,9 +5,7 @@ project.
 
 ## Engineering rules (HyMo-specific)
 
-- **Raw PyTorch first.** No HF Trainer, no Lightning. Phase 1 introduces
-  only the structural types; the loop, kernels, and distributed training
-  stay raw.
+- **Raw PyTorch first.** No HF Trainer, no Lightning. The loop, kernels, and distributed training stay raw and deeply optimized using PyTorch-native APIs (`torch.compile`, `FSDP`).
 - **Strong typing.** Every public function and method is fully annotated.
   `mypy --strict` is the gate.
 - **No hardcoded numbers.** All hyperparameters live in
@@ -18,9 +16,7 @@ project.
 - **Frozen dataclasses for config.** All config classes are
   ``@dataclass(frozen=True)`` so accidental mutation in the training
   loop is a hard error. Use ``dataclasses.replace`` to derive variants.
-- **Phase 1 has no algorithmic logic.** Models are placeholders that
-  raise :class:`hymo.core.exceptions.NotImplementedError`. The point of
-  Phase 1 is the *interfaces* — no premature implementation.
+- **Algorithmic Logic is Active (Phase 3/4).** Models are fully implemented. Do not use `NotImplementedError` placeholders unless stubbing out future experiments.
 - **No circular dependencies.** The dependency graph is strictly:
   ``core ← registry ← utils ← {models, training, data, eval}``.
   ``models`` and ``training`` do not import each other directly; they
@@ -77,6 +73,6 @@ build it by default. Follow this exact style for every test:
   the README.
 - Don't import torch from ``hymo.core`` — that subpackage must stay
   PyTorch-free.
-- Don't implement model logic in Phase 1 — keep placeholders.
+- **Don't use NotImplementedError** for core model logic — it should be fully implemented and compiled.
 - Don't build the full 1.86B model in a default (non-``heavy``) test.
 - Don't hardcode production-scale numbers into tiny-config tests.

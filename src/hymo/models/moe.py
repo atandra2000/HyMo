@@ -137,6 +137,8 @@ class DeepSeekMoE(nn.Module):
             e_mask = (top_indices == e)
             flat_mask = e_mask.any(dim=-1).reshape(-1)
             sel = flat_mask.nonzero(as_tuple=False).reshape(-1)
+            # Use 32-bit indices to reduce memory bandwidth
+            sel = sel.to(torch.int32)
             if sel.numel() == 0:
                 continue
             if sel.numel() > capacity:

@@ -6,7 +6,7 @@ from pathlib import Path
 
 import pytest
 
-from hymo.utils.atomic_io import (
+from hymo.utils import (
     atomic_write_bytes,
     atomic_write_with,
 )

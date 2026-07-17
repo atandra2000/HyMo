@@ -34,9 +34,18 @@ def _make_val_bin(tmp_path: Path, num_tokens: int = 4096) -> Path:
 
 
 class TestFSDPPlaceholders:
-    def test_fsdp_auto_wrap_policy_raises(self) -> None:
-        with pytest.raises(NotImplementedError_):
-            fsdp_auto_wrap_policy(None, recurse=True, non_blocking=True)
+    def test_fsdp_auto_wrap_policy_returns_false_for_non_block(self) -> None:
+        """Policy should return False for modules that are not GDN/MLA blocks."""
+        from torch import nn
+        dummy = nn.Linear(4, 4)
+        result = fsdp_auto_wrap_policy(dummy, recurse=True, non_blocking=True)
+        assert result is False
+
+    def test_fsdp_auto_wrap_policy_returns_true_for_gdn(self, tiny_hymo_config) -> None:
+        """Policy should return True when given a GatedDeltaNetBlock."""
+        from hymo.models.gdn import GatedDeltaNetBlock
+        block = GatedDeltaNetBlock(tiny_hymo_config.model, layer_idx=0)
+        assert fsdp_auto_wrap_policy(block, recurse=True, non_blocking=True) is True
 
     @pytest.mark.heavy
     def test_shard_nor_muon_params_raises(self) -> None:
@@ -102,7 +111,8 @@ class TestTrainer:
         trainer = Trainer(config, model)
         ckpt_path = trainer.save(tag="test_save")
         assert ckpt_path.exists()
-        assert ckpt_path.suffix == ".pt"
+        # DCP saves a directory, not a single .pt file.
+        assert ckpt_path.is_dir()
 
         # Load into a fresh trainer.
         model2 = HyMo(config.model)

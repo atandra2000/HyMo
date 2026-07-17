@@ -51,6 +51,7 @@ class train_step_result:
     grad_norm: float
     lr_muon: float
     lr_adamw: float
+    is_update: bool = True
     skipped: bool = False
     metrics: dict[str, float] = field(default_factory=dict)
 
@@ -66,6 +67,20 @@ class Trainer:
         self._config = config
         self.model = model
 
+        import os
+        import torch.distributed as dist
+        _wandb_disabled = os.environ.get("WANDB_MODE", "").lower() in ("disabled", "offline", "dryrun")
+        if not _wandb_disabled and (not dist.is_initialized() or dist.get_rank() == 0):
+            import wandb
+            import dataclasses
+            cfg_dict = dataclasses.asdict(config) if dataclasses.is_dataclass(config) else {}
+            wandb.init(
+                project="HyMo",
+                config=cfg_dict,
+                resume="allow",
+            )
+        self._wandb_enabled = not _wandb_disabled
+
         self.optimizers = build_optimizers(model, config.optimizer)
         self.scheduler = JointWSDScheduler(config.scheduler)
 
@@ -75,8 +90,12 @@ class Trainer:
         self._base_lr_adamw: float = config.optimizer.adamw_lr
 
         self.step: int = 0
+        self.micro_step: int = 0
         self.token_count: int = 0
         self.best_loss: float = float("inf")
+        
+        # Removed whole-model torch.compile() because it is incompatible with FSDP-2
+        # and MoE dynamic shapes. GDN blocks are now compiled individually.
 
         if config.model.mtp_depth > 0:
             self._has_mtp = True
@@ -129,34 +148,43 @@ class Trainer:
                 grad_norm=0.0,
                 lr_muon=self._current_lr_muon(),
                 lr_adamw=self._current_lr_adamw(),
+                is_update=False,
                 skipped=True,
                 metrics={"main_loss": float("nan"), **mtp_details},
             )
 
-        total_loss.backward()  # type: ignore[no-untyped-call]
+        # Scale loss for gradient accumulation
+        scaled_loss = total_loss / self._config.training.gradient_accumulation_steps
+        scaled_loss.backward()
 
-        grad_norm = torch.nn.utils.clip_grad_norm_(
-            self.model.parameters(),
-            max_norm=self._config.training.grad_clip,
-            norm_type=2.0,
-        )
-        grad_norm_val = grad_norm.item() if isinstance(grad_norm, torch.Tensor) else float(grad_norm)
+        self.micro_step += 1
+        is_update = (self.micro_step % self._config.training.gradient_accumulation_steps == 0)
+        grad_norm_val = 0.0
 
-        factor = self.scheduler.get_factor(self.step + 1)
-        if self.optimizers.nor_muon is not None and self._base_lr_muon is not None:
-            for g in self.optimizers.nor_muon.param_groups:
-                g["lr"] = self._base_lr_muon * factor
-        for g in self.optimizers.adamw.param_groups:
-            g["lr"] = self._base_lr_adamw * factor
+        if is_update:
+            grad_norm = torch.nn.utils.clip_grad_norm_(
+                self.model.parameters(),
+                max_norm=self._config.training.grad_clip,
+                norm_type=2.0,
+            )
+            grad_norm_val = grad_norm.item() if isinstance(grad_norm, torch.Tensor) else float(grad_norm)
 
-        if self.optimizers.nor_muon is not None:
-            self.optimizers.nor_muon.step()
-        self.optimizers.adamw.step()
+            factor = self.scheduler.get_factor(self.step + 1)
+            if self.optimizers.nor_muon is not None and self._base_lr_muon is not None:
+                for g in self.optimizers.nor_muon.param_groups:
+                    g["lr"] = self._base_lr_muon * factor
+            for g in self.optimizers.adamw.param_groups:
+                g["lr"] = self._base_lr_adamw * factor
 
-        self.scheduler.step()
-        self.model.zero_grad(set_to_none=True)
+            if self.optimizers.nor_muon is not None:
+                self.optimizers.nor_muon.step()
+            self.optimizers.adamw.step()
 
-        self.step += 1
+            self.scheduler.step()
+            self.model.zero_grad(set_to_none=True)
+
+            self.step += 1
+
         self.token_count += tokens.numel()
 
         return train_step_result(
@@ -164,17 +192,18 @@ class Trainer:
             grad_norm=grad_norm_val,
             lr_muon=self._current_lr_muon(),
             lr_adamw=self._current_lr_adamw(),
+            is_update=is_update,
             skipped=False,
             metrics={"main_loss": main_loss.item(), **mtp_details},
         )
 
     def save(self, tag: str | None = None) -> Path:
-        """Save a training checkpoint file to output directory."""
+        """Save a training checkpoint directory using DCP."""
         if tag is None:
             tag = f"step_{self.step}"
         output_dir = Path(self._config.run.output_dir)
+        # DCP writes a directory, not a single file — use ckpt_dir as the checkpoint ID.
         ckpt_dir = output_dir / tag
-        ckpt_path = ckpt_dir / "model.pt"
 
         state = CheckpointState(
             step=self.step,
@@ -183,21 +212,20 @@ class Trainer:
         )
 
         save_checkpoint(
-            path=ckpt_path,
+            path=ckpt_dir,
             model=self.model,
             optimizers=self.optimizers,
             scheduler=self.scheduler,
             state=state,
         )
 
-        log.info("Checkpoint saved to %s (step=%d)", ckpt_path, self.step)
-        return ckpt_path
+        log.info("Checkpoint saved to %s (step=%d)", ckpt_dir, self.step)
+        return ckpt_dir
 
     def load(self, path: str | Path) -> int:
-        """Load a checkpoint file to resume training state."""
+        """Load a DCP checkpoint directory and restore training state."""
         p = Path(path)
-        if p.is_dir():
-            p = p / "model.pt"
+        # DCP checkpoint_id is a directory; no sub-file redirect needed.
 
         state = load_checkpoint(
             path=p,
@@ -226,30 +254,37 @@ class Trainer:
 
             result = self.train_step(tokens, targets)
 
-            if (
-                self.step % self._config.training.log_interval == 0
-                and not result.skipped
-            ):
-                log.info(
-                    "step=%d loss=%.4f grad_norm=%.4f lr_muon=%.6f lr_adamw=%.6f",
-                    self.step, result.loss, result.grad_norm,
-                    result.lr_muon, result.lr_adamw,
-                )
+            if result.is_update:
+                if (
+                    self.step % self._config.training.log_interval == 0
+                    and not result.skipped
+                ):
+                    import torch.distributed as dist
+                    if self._wandb_enabled and (not dist.is_initialized() or dist.get_rank() == 0):
+                        import wandb
+                        wandb.log({
+                            "train/loss": result.loss,
+                            "train/grad_norm": result.grad_norm,
+                            "train/lr_muon": result.lr_muon,
+                            "train/lr_adamw": result.lr_adamw,
+                            "train/tokens": self.token_count,
+                            **{f"train/{k}": v for k, v in result.metrics.items()}
+                        }, step=self.step)
 
-            if (
-                self._config.training.eval_interval > 0
-                and self.step % self._config.training.eval_interval == 0
-            ):
-                eval_metrics = self.evaluate()
-                if eval_metrics.get("val_loss", float("inf")) < self.best_loss:
-                    self.best_loss = eval_metrics["val_loss"]
-                    self.save(tag="best")
+                if (
+                    self._config.training.eval_interval > 0
+                    and self.step % self._config.training.eval_interval == 0
+                ):
+                    eval_metrics = self.evaluate()
+                    if eval_metrics.get("val_loss", float("inf")) < self.best_loss:
+                        self.best_loss = eval_metrics["val_loss"]
+                        self.save(tag="best")
 
-            if (
-                self._config.training.save_interval > 0
-                and self.step % self._config.training.save_interval == 0
-            ):
-                self.save()
+                if (
+                    self._config.training.save_interval > 0
+                    and self.step % self._config.training.save_interval == 0
+                ):
+                    self.save()
 
     def evaluate(self, val_bin_path: str | Path | None = None) -> dict[str, float]:
         """Compute evaluation metrics over the validation subset."""
@@ -268,11 +303,15 @@ class Trainer:
             val_bin_path=Path(val_bin_path) if val_bin_path else DEFAULT_VAL_BIN,
         )
 
-        log.info(
-            "eval step=%d val_loss=%.4f val_ppl=%.4f batches=%d tokens=%d",
-            self.step, metrics.loss, metrics.ppl,
-            metrics.num_batches, metrics.num_tokens,
-        )
+        import torch.distributed as dist
+        if self._wandb_enabled and (not dist.is_initialized() or dist.get_rank() == 0):
+            import wandb
+            wandb.log({
+                "val/loss": metrics.loss,
+                "val/ppl": metrics.ppl,
+                "val/batches": metrics.num_batches,
+                "val/tokens": metrics.num_tokens,
+            }, step=self.step)
 
         return {
             "val_loss": metrics.loss,

@@ -2,12 +2,17 @@
 
 from __future__ import annotations
 
+import os
 import platform
 from pathlib import Path
 from typing import TYPE_CHECKING
 
 import pytest
 import torch
+
+# Disable W&B before any test import triggers trainer init.
+# This prevents WandbServiceConnectionError in sandboxed / offline environments.
+os.environ.setdefault("WANDB_MODE", "disabled")
 
 from hymo.core.config import HyMoConfig, ModelConfig, load_config
 from hymo.models import HyMo

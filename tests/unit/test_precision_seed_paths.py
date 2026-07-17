@@ -13,13 +13,13 @@ import pytest
 import torch
 
 from hymo.core.config import RunConfig
-from hymo.utils.precision import (
+from hymo.utils import (
     autocast_disabled,
     bf16_forward,
     fp32_master_weights,
     resolve_dtype,
 )
-from hymo.utils.seed import seed_for_rank, set_seed
+from hymo.utils import seed_for_rank, set_seed
 
 
 class TestResolveDtype:

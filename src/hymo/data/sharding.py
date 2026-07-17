@@ -79,7 +79,8 @@ class ShardDataset(Dataset[tuple[torch.Tensor, torch.Tensor]]):
 
     def _load_all(self) -> None:
         for sp in self._shard_paths:
-            data = np.fromfile(sp, dtype=np.uint32)
+            # Use memmap for zero-copy, lazy loading (prevents RAM OOM on 30B tokens)
+            data = np.memmap(sp, dtype=np.uint32, mode="r")
             self._shard_data.append(data)
             self._total_tokens += len(data)
 
@@ -123,6 +124,7 @@ class DataLoaderBuilder:
         self.config = config
 
     def build(self) -> DataLoader[Any]:
+        import os
         effective_batch = self.config.micro_batch_size
         sampler = torch.utils.data.RandomSampler(
             self.dataset,
@@ -134,13 +136,17 @@ class DataLoaderBuilder:
                 * 100
             ),
         )
-        num_workers = min(4, self.config.world_size) if self.config.world_size > 1 else 0
+        # Optimize num_workers based on CPU cores to keep A100s fed
+        cpu_count = os.cpu_count() or 4
+        num_workers = max(1, min(8, cpu_count // max(1, self.config.world_size)))
+        
         return DataLoader(
             self.dataset,
             batch_size=effective_batch,
             sampler=sampler,
             num_workers=num_workers,
             pin_memory=True,
-            prefetch_factor=2 if num_workers > 0 else None,
+            prefetch_factor=4 if num_workers > 0 else None,
             drop_last=True,
+            persistent_workers=True if num_workers > 0 else False,
         )

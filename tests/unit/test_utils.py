@@ -8,7 +8,7 @@ from pathlib import Path
 
 import pytest
 
-from hymo.utils.logging import MetricsLogger, get_logger
+from hymo.utils import MetricsLogger, get_logger
 
 
 class TestGetLogger:

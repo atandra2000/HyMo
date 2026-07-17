@@ -45,7 +45,8 @@ dependencies = [
 [project.optional-dependencies]
 # Production training deps — installed only when running the primary 30B run
 train = [
-    "fla>=0.1",                 # fla-org GDN kernel
+    # "fla>=0.1",                 # fla-org GDN kernel (unavailable in standard registry)
+    "triton>=3.0.0; sys_platform == 'linux'", # custom Triton kernel for GDN
     "lm-eval>=0.4.5",           # held-out evaluation harness
     "wandb>=0.17",              # optional: W&B logging
 ]

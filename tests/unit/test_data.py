@@ -271,7 +271,15 @@ class TestShardDataset:
 class TestDataLoaderBuilder:
     """Verify DataLoaderBuilder constructs partitioned dataloaders."""
 
-    def test_construct(self, tmp_path: Path) -> None:
+    def test_construct(self, tmp_path: Path, monkeypatch: pytest.MonkeyPatch) -> None:
+        # Force num_workers=0 (single-process DataLoader) so PyTorch does not
+        # attempt shared-memory IPC, which is blocked in sandbox / CI
+        # environments.  Production behaviour is unchanged; only os.cpu_count
+        # inside the sharding module is stubbed for this test.
+        import hymo.data.sharding as _sharding_mod
+
+        monkeypatch.setattr(_sharding_mod.os, "cpu_count", lambda: 0)
+
         w = ShardWriter(output_dir=tmp_path, shard_size_tokens=200)
         w.write_shard(0, np.arange(200, dtype=np.uint32))
         d = ShardDataset(tmp_path, max_seq_len=8)

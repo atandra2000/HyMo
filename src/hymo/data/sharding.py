@@ -6,6 +6,7 @@ as PyTorch Datasets, and build training DataLoaders.
 
 from __future__ import annotations
 
+import os
 from pathlib import Path
 from typing import Any
 
@@ -124,7 +125,6 @@ class DataLoaderBuilder:
         self.config = config
 
     def build(self) -> DataLoader[Any]:
-        import os
         effective_batch = self.config.micro_batch_size
         sampler = torch.utils.data.RandomSampler(
             self.dataset,
@@ -136,10 +136,13 @@ class DataLoaderBuilder:
                 * 100
             ),
         )
-        # Optimize num_workers based on CPU cores to keep A100s fed
-        cpu_count = os.cpu_count() or 4
-        num_workers = max(1, min(8, cpu_count // max(1, self.config.world_size)))
-        
+        # Optimize num_workers based on available CPU cores to keep A100s fed.
+        # Allow 0 when cpu_count is low (e.g. sandboxed environments / CI) so
+        # PyTorch falls back to single-process loading and avoids shared-memory
+        # IPC that may be restricted by the OS.
+        cpu_count = os.cpu_count() or 0
+        num_workers = max(0, min(8, cpu_count // max(1, self.config.world_size)))
+
         return DataLoader(
             self.dataset,
             batch_size=effective_batch,
@@ -148,5 +151,5 @@ class DataLoaderBuilder:
             pin_memory=True,
             prefetch_factor=4 if num_workers > 0 else None,
             drop_last=True,
-            persistent_workers=True if num_workers > 0 else False,
+            persistent_workers=num_workers > 0,
         )

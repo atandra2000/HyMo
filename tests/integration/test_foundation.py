@@ -1,8 +1,4 @@
-"""Integration tests: the foundation pieces fit together.
-
-These tests don't exercise any algorithmic logic (Phase 2+ work) but
-they verify that the public API surface is internally consistent.
-"""
+"""Integration tests to verify public API surface is internally consistent."""
 
 from __future__ import annotations
 
@@ -25,17 +21,11 @@ from hymo.training import (
     build_optimizers,
     partition_parameters,
 )
-from hymo.utils import (
-    Callback,
-    CallbackList,
-    MetricsLogger,
-    ProjectPaths,
-    TrainerState,
-)
+from hymo.utils import MetricsLogger
 
 
 class TestPublicApi:
-    """The top-level package re-exports the public API."""
+    """Verify top-level package exports the public API classes."""
 
     def test_config_classes_exported(self) -> None:
         assert HyMoConfig is not None
@@ -51,25 +41,34 @@ class TestPublicApi:
 
     def test_utils_classes_exported(self) -> None:
         assert MetricsLogger is not None
-        assert Callback is not None
-        assert ProjectPaths is not None
 
     def test_registry_exported(self) -> None:
         from hymo.registry import DATA_SOURCES, MODELS, TOKENIZERS
-
         assert isinstance(MODELS, Registry)
         assert isinstance(TOKENIZERS, Registry)
         assert isinstance(DATA_SOURCES, Registry)
 
 
 class TestEndToEndConfig:
-    """Load the production config, build a model, build optimizers."""
+    """Verify loading config and building models."""
 
-    def test_load_and_build(self) -> None:
+    def test_load_and_build_tiny(self, tiny_hymo_config: HyMoConfig) -> None:
+        model = build_hymo(tiny_hymo_config)
+        assert model.config.n_layers == 4
+        from hymo.models import GatedDeltaNetBlock, MLABlock
+
+        n_mla = sum(1 for layer in model.layers if isinstance(layer, MLABlock))
+        n_gdn = sum(1 for layer in model.layers if isinstance(layer, GatedDeltaNetBlock))
+        assert (n_mla, n_gdn) == (1, 3)
+
+        opts = build_optimizers(model, tiny_hymo_config.optimizer)
+        assert opts.nor_muon is not None
+        assert opts.adamw is not None
+
+    @pytest.mark.heavy
+    def test_load_and_build_full(self) -> None:
         config = load_config("configs/hymo_750m.yaml")
         model = build_hymo(config)
-
-        # Model has 32 layers, 8 MLA + 24 GDN.
         assert model.config.n_layers == 32
         from hymo.models import GatedDeltaNetBlock, MLABlock
 
@@ -77,36 +76,53 @@ class TestEndToEndConfig:
         n_gdn = sum(1 for layer in model.layers if isinstance(layer, GatedDeltaNetBlock))
         assert (n_mla, n_gdn) == (8, 24)
 
-        # Build optimizers.
         opts = build_optimizers(model, config.optimizer)
         assert opts.nor_muon is not None
         assert opts.adamw is not None
 
-    def test_lr_ratio_in_production_config(self) -> None:
-        config = load_config("configs/hymo_750m.yaml")
-        # lr_muon / lr_adamw ≈ 66.7
+    def test_lr_ratio_in_production_config(self, production_config_only: HyMoConfig) -> None:
+        config = production_config_only
         assert config.optimizer.muon_lr / config.optimizer.adamw_lr == pytest.approx(
             66.67, abs=0.01
         )
 
-    def test_30b_tokens_57220_steps(self) -> None:
-        config = load_config("configs/hymo_750m.yaml")
+    def test_30b_tokens_57220_steps(self, production_config_only: HyMoConfig) -> None:
+        config = production_config_only
         per_step = config.training.per_step_tokens
         steps = config.scheduler.total_steps
-        # 57,220 * 524,288 = 29,999,759,360 ≈ 30B.
         assert per_step * steps == pytest.approx(30e9, rel=1e-3)
 
-    def test_wsd_fractions_sum_to_one(self) -> None:
-        config = load_config("configs/hymo_750m.yaml")
+    def test_wsd_fractions_sum_to_one(self, production_config_only: HyMoConfig) -> None:
+        config = production_config_only
         s = config.scheduler
         assert s.warmup_frac + s.stable_frac + s.decay_frac == pytest.approx(1.0)
 
 
 class TestPartitioningEndToEnd:
-    """The partition routes the right parameters to the right optimizer."""
+    """Verify parameters are correctly routed to AdamW vs NorMuon optimizers."""
 
-    def test_384_routed_expert_weights_on_adamw(self) -> None:
-        """8 MLA layers × 16 experts × 3 matrices = 384."""
+    def test_routed_expert_weights_on_adamw_tiny(self, tiny_hymo_model: HyMo) -> None:
+        m = tiny_hymo_model.config
+        n_mla = sum(1 for layer in tiny_hymo_model.layers if hasattr(layer, "moe"))
+        partition = partition_parameters(tiny_hymo_model)
+        adamw_ids = {id(p) for p in partition.adamw}
+
+        n_expert = 0
+        for name, p in tiny_hymo_model.named_parameters():
+            if (
+                ".experts." in name
+                and (
+                    name.endswith(".w1.weight")
+                    or name.endswith(".w2.weight")
+                    or name.endswith(".w3.weight")
+                )
+                and id(p) in adamw_ids
+            ):
+                n_expert += 1
+        assert n_expert == n_mla * m.n_routed_experts * 3
+
+    @pytest.mark.heavy
+    def test_384_routed_expert_weights_on_adamw_full(self) -> None:
         config = load_config("configs/hymo_750m.yaml")
         model = HyMo(config.model)
         partition = partition_parameters(model)
@@ -126,8 +142,18 @@ class TestPartitioningEndToEnd:
                 n_expert += 1
         assert n_expert == 384
 
-    def test_24_shared_expert_weights_on_adamw(self) -> None:
-        """8 MLA layers × 1 shared × 3 matrices = 24."""
+    def test_shared_expert_weights_on_adamw_tiny(self, tiny_hymo_model: HyMo) -> None:
+        partition = partition_parameters(tiny_hymo_model)
+        adamw_ids = {id(p) for p in partition.adamw}
+
+        n_shared = 0
+        for name, p in tiny_hymo_model.named_parameters():
+            if ".shared_expert." in name and id(p) in adamw_ids:
+                n_shared += 1
+        assert n_shared == 3
+
+    @pytest.mark.heavy
+    def test_24_shared_expert_weights_on_adamw_full(self) -> None:
         config = load_config("configs/hymo_750m.yaml")
         model = HyMo(config.model)
         partition = partition_parameters(model)
@@ -139,8 +165,18 @@ class TestPartitioningEndToEnd:
                 n_shared += 1
         assert n_shared == 24
 
-    def test_24_gdn_a_log_on_adamw(self) -> None:
-        """24 GDN layers × 1 A_log = 24."""
+    def test_gdn_a_log_on_adamw_tiny(self, tiny_hymo_model: HyMo) -> None:
+        partition = partition_parameters(tiny_hymo_model)
+        adamw_ids = {id(p) for p in partition.adamw}
+        n = sum(
+            1
+            for name, p in tiny_hymo_model.named_parameters()
+            if name.endswith(".A_log") and id(p) in adamw_ids
+        )
+        assert n == 3
+
+    @pytest.mark.heavy
+    def test_24_gdn_a_log_on_adamw_full(self) -> None:
         config = load_config("configs/hymo_750m.yaml")
         model = HyMo(config.model)
         partition = partition_parameters(model)
@@ -152,13 +188,10 @@ class TestPartitioningEndToEnd:
         )
         assert n == 24
 
-    def test_no_expert_on_nor_muon(self) -> None:
-        """No MoE expert weight should be on NorMuon (claim 2)."""
-        config = load_config("configs/hymo_750m.yaml")
-        model = HyMo(config.model)
-        partition = partition_parameters(model)
+    def test_no_expert_on_nor_muon_tiny(self, tiny_hymo_model: HyMo) -> None:
+        partition = partition_parameters(tiny_hymo_model)
         for p in partition.nor_muon:
-            for name, q in model.named_parameters():
+            for name, q in tiny_hymo_model.named_parameters():
                 if q is p and ".experts." in name:
                     pytest.fail(f"Expert weight {name} on NorMuon")
                 if q is p and ".shared_expert." in name:
@@ -166,18 +199,17 @@ class TestPartitioningEndToEnd:
 
 
 class TestDerivedConfig:
-    """Derive a v1.1 ablation-style config from the v1.0 base."""
+    """Verify configuration derivation works correctly."""
 
     def test_derive_with_smaller_layer_count(self) -> None:
         base = load_config("configs/hymo_750m.yaml")
         derived = replace(
             base,
-            model=replace(base.model, n_layers=4),  # hypothetical
+            model=replace(base.model, n_layers=4),
             run=replace(base.run, name="hymo-test"),
         )
         assert derived.model.n_layers == 4
         assert derived.run.name == "hymo-test"
-        # Other fields unchanged.
         assert derived.scheduler.total_steps == base.scheduler.total_steps
 
     def test_derive_to_disable_mtp(self) -> None:
@@ -191,40 +223,8 @@ class TestDerivedConfig:
         assert derived.model.mtp_loss_weights == ()
 
 
-class TestCallbackListWithTrainer:
-    """The CallbackList integrates with the trainer (Phase 1 surface)."""
-
-    def test_callback_runs_during_event_dispatch(self) -> None:
-        seen: list[str] = []
-
-        class C:
-            def on_train_begin(self, state: TrainerState) -> None:
-                seen.append("begin")
-            def on_step_end(self, state: TrainerState) -> None:
-                seen.append("step")
-
-        cl = CallbackList([C()])
-        cl.dispatch("on_train_begin", TrainerState())
-        cl.dispatch("on_step_end", TrainerState())
-        assert seen == ["begin", "step"]
-
-
-class TestProjectPathsFromConfig:
-    """Paths can be derived from a :class:`RunConfig`."""
-
-    def test_paths_from_production_config(self) -> None:
-        config = load_config("configs/hymo_750m.yaml")
-        paths = ProjectPaths.from_config(config.run)
-        # ``output_dir`` is ``<root> / config.output_dir``; default root
-        # is the current working directory.
-        assert paths.output_dir == Path.cwd() / "checkpoints/pretrain"
-        assert paths.log_dir == Path.cwd() / "logs"
-        assert paths.eval_dir == Path.cwd() / "checkpoints/pretrain/eval"
-        assert paths.metrics_path == Path.cwd() / "logs" / "metrics.jsonl"
-
-
 class TestMetricsLoggerRoundTrip:
-    """Trainer writes metrics, eval reads them."""
+    """Verify MetricsLogger round trip saving and loading."""
 
     def test_log_and_replay(self, tmp_path: Path) -> None:
         path = tmp_path / "metrics.jsonl"
@@ -240,7 +240,7 @@ class TestMetricsLoggerRoundTrip:
 
 
 class TestModelRegistry:
-    """The HyMo class is registered with MODELS."""
+    """Verify the HyMo class is registered and can be built."""
 
     def test_hymo_registered(self) -> None:
         assert MODELS.has("hymo")

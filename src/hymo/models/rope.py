@@ -1,13 +1,7 @@
 """Rotary Position Embedding (RoPE) and NoPE helpers.
 
-This module is a Phase 1 placeholder. The real implementation
-(wire :class:`RotaryEmbedding` to the per-layer ``use_rope`` flag in
-:class:`hymo.models.gdn.GatedDeltaNetBlock` and to the
-``q_pe`` split in :class:`hymo.models.mla.MultiHeadLatentAttention`)
-lands in Phase 2.
-
-The signatures are stable; the bodies raise
-:class:`hymo.core.exceptions.NotImplementedError_`.
+Precomputes cos/sin tables once and applies standard per-pair complex rotation
+on the specified partial head dimension slice (NoPE-hybrid pattern).
 """
 
 from __future__ import annotations
@@ -16,36 +10,13 @@ import torch
 from torch import nn
 
 from hymo.core.config import ModelConfig
-from hymo.core.exceptions import NotImplementedError_
 from hymo.core.types import DType
 
 __all__ = ["RotaryEmbedding"]
 
 
 class RotaryEmbedding(nn.Module):
-    """Rotary Position Embedding (RoPE) cache.
-
-    Computes ``cos`` and ``sin`` tables of shape
-    ``(max_seq_len, head_dim)`` once at construction time and applies
-    them to the input via ``apply(x, start_pos)``.
-
-    Phase 1 placeholder: this class constructs and has the right
-    signature, but :meth:`apply` raises ``NotImplementedError_``.
-
-    Parameters
-    ----------
-    head_dim : int
-        The dimension of the head to apply RoPE to. Typically
-        ``qk_rope_head_dim`` (32 for HyMo, the 25% partial-RoPE).
-    max_seq_len : int
-        The maximum sequence length. Tables are precomputed for this
-        length.
-    theta : float
-        The base of the RoPE frequencies (default 10,000).
-    dtype : torch.dtype or None
-        The dtype of the cached tables. Defaults to the model's
-        compute dtype.
-    """
+    """Rotary Position Embedding (RoPE) cache (Phase 2)."""
 
     def __init__(
         self,
@@ -65,23 +36,54 @@ class RotaryEmbedding(nn.Module):
         self.max_seq_len = max_seq_len
         self.theta = theta
         self._dtype = dtype or torch.float32
-        # Precompute the cos/sin tables on construction (real impl in Phase 2).
-        self._tables_computed = False
+
+        # Precompute the cos/sin tables once as non-persistent buffers
+        freqs = 1.0 / (theta ** (torch.arange(0, head_dim, 2, dtype=torch.float32) / head_dim))
+        positions = torch.arange(max_seq_len, dtype=torch.float32)
+        angles = torch.outer(positions, freqs)
+        cos_tab = angles.cos().repeat_interleave(2, dim=-1)
+        sin_tab = angles.sin().repeat_interleave(2, dim=-1)
+        self.register_buffer("cos_cached", cos_tab.to(self._dtype), persistent=False)
+        self.register_buffer("sin_cached", sin_tab.to(self._dtype), persistent=False)
+
+        # Typed references for type-checking
+        self._cos: torch.Tensor = self.cos_cached  # type: ignore[assignment]
+        self._sin: torch.Tensor = self.sin_cached  # type: ignore[assignment]
 
     def apply_rope(
         self,
         x: torch.Tensor,
         start_pos: int = 0,
     ) -> torch.Tensor:
-        """Apply RoPE to ``x`` at the given ``start_pos``.
+        """Apply RoPE rotation to input tensor x of shape (..., T, head_dim)."""
+        if x.shape[-1] != self.head_dim:
+            raise ValueError(
+                f"x.shape[-1] ({x.shape[-1]}) must equal "
+                f"self.head_dim ({self.head_dim})"
+            )
+        if start_pos < 0:
+            raise ValueError(f"start_pos must be >= 0, got {start_pos}")
+        seq_len = x.shape[-2]
+        if start_pos + seq_len > self.max_seq_len:
+            raise ValueError(
+                f"start_pos + seq_len ({start_pos + seq_len}) exceeds "
+                f"max_seq_len ({self.max_seq_len})"
+            )
 
-        Phase 1 placeholder — raises :class:`NotImplementedError_`.
-        """
-        raise NotImplementedError_(
-            "RotaryEmbedding.apply_rope is a Phase 1 placeholder; "
-            "the real implementation lands in Phase 2 (design §3.1, "
-            "roadmap B1)."
-        )
+        cos = self._cos[start_pos:start_pos + seq_len].to(x.dtype).view(1, seq_len, self.head_dim)
+        sin = self._sin[start_pos:start_pos + seq_len].to(x.dtype).view(1, seq_len, self.head_dim)
+
+        # Strided pairing for adjacent elements rotation
+        cos_even, cos_odd = cos[..., 0::2], cos[..., 1::2]
+        sin_even, sin_odd = sin[..., 0::2], sin[..., 1::2]
+        x_even, x_odd = x[..., 0::2], x[..., 1::2]
+        rot_even = x_even * cos_even - x_odd * sin_even
+        rot_odd = x_even * sin_odd + x_odd * cos_odd
+
+        out = torch.empty_like(x)
+        out[..., 0::2] = rot_even
+        out[..., 1::2] = rot_odd
+        return out
 
     def extra_repr(self) -> str:
         return (
@@ -91,7 +93,7 @@ class RotaryEmbedding(nn.Module):
 
     @classmethod
     def from_config(cls, config: ModelConfig) -> RotaryEmbedding:
-        """Build a :class:`RotaryEmbedding` from a :class:`ModelConfig`."""
+        """Build RotaryEmbedding from ModelConfig config parameters."""
         return cls(
             head_dim=config.qk_rope_head_dim,
             max_seq_len=config.max_seq_len,

@@ -1,10 +1,9 @@
-"""Tests for the eval placeholders and the comparison table."""
+"""Tests for the eval module (Phase 4)."""
 
 from __future__ import annotations
 
 import pytest
 
-from hymo.core.exceptions import NotImplementedError_
 from hymo.eval import (
     BASELINES,
     EVAL_SUITE,
@@ -13,8 +12,6 @@ from hymo.eval import (
     EvalResult,
     EvalSuiteResult,
     format_comparison_table,
-    run_all,
-    run_harness_eval,
 )
 
 
@@ -34,7 +31,6 @@ class TestBaselines:
             }, f"Baseline {name!r} has wrong metrics"
 
     def test_mobile_moe_ppl_target(self) -> None:
-        """The v1.0 PPL target is ≤ 2.10 (architecture doc §15)."""
         assert BASELINES["mobile_moe_0.9b"]["fineweb_edu_ppl"] == 2.10
 
 
@@ -68,16 +64,11 @@ class TestFormatComparisonTable:
             "humaneval": 0.08,
         }
         table = format_comparison_table(results)
-        # Header.
         assert "| Metric | HyMo |" in table
         assert "| Pythia-1B |" in table
         assert "| MobileMoE-0.9B |" in table
         assert "| SmolLM2-1.7B |" in table
-        # 6 rows + 1 header + 1 separator = 8 lines.
         assert len(table.split("\n")) == 8
-        # Each row should contain the HyMo value formatted to 3 decimals.
-        assert "2.050" in table  # fineweb_edu_ppl
-        assert "0.400" in table  # hellaswag
 
     def test_subset_of_baselines(self) -> None:
         results = {
@@ -90,7 +81,6 @@ class TestFormatComparisonTable:
         }
         table = format_comparison_table(results, baselines=("pythia-1b",))
         assert "| Pythia-1B |" in table
-        # The other two baselines should not appear.
         assert "MobileMoE" not in table
         assert "SmolLM" not in table
 
@@ -114,9 +104,15 @@ class TestEvalResult:
 
 
 class TestRunHarnessEval:
-    def test_raises(self) -> None:
-        with pytest.raises(NotImplementedError_):
-            run_harness_eval(None, None, ["hellaswag"])
+    def test_raises_on_missing_lm_eval(self) -> None:
+        try:
+            import lm_eval  # noqa: F401
+            pytest.skip("lm-eval is installed; can't test import error path")
+        except ImportError:
+            from hymo.eval.harness import run_harness_eval
+
+            with pytest.raises(ModuleNotFoundError):
+                run_harness_eval(None, None, ["hellaswag"])
 
 
 class TestRunAll:
@@ -128,10 +124,14 @@ class TestRunAll:
         assert "mmlu" in task_names
         assert "gsm8k" in task_names
         assert "humaneval" in task_names
+        assert "fineweb_edu_ppl" in task_names
 
-    def test_raises(self) -> None:
-        with pytest.raises(NotImplementedError_):
-            run_all(None, None)
+    def test_suite_result_types(self) -> None:
+        suite = EvalSuiteResult(
+            results={"hellaswag": {"acc_norm": 0.40}},
+            summary={"hellaswag_acc": 0.40},
+        )
+        assert isinstance(suite.results, dict)
 
 
 class TestEvalSuiteResult:

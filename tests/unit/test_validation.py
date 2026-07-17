@@ -1,4 +1,4 @@
-"""Tests for the :mod:`hymo.core.validation` module."""
+"""Tests for the :mod:`hymo.core.config_validation` module."""
 
 from __future__ import annotations
 
@@ -9,8 +9,8 @@ from hymo.core.config import (
     ModelConfig,
     TrainingConfig,
 )
+from hymo.core.config_validation import validate_full_config
 from hymo.core.exceptions import ConfigValidationError
-from hymo.core.validation import validate_full_config
 
 
 class TestValidateFullConfig:

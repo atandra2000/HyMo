@@ -4,7 +4,7 @@ from __future__ import annotations
 
 # Side-effect import: registers the 10 data sources with DATA_SOURCES.
 import hymo.data.sources  # noqa: F401
-from hymo.data.config import (
+from hymo.data.data_config import (
     DataConfig,
     DedupConfig,
     QualityConfig,

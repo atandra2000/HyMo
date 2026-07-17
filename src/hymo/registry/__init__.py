@@ -1,22 +1,32 @@
-"""Public registry: named-constructor pattern for models, optimizers, etc.
-
-The :class:`hymo.utils.registry.Registry` is the general-purpose
-implementation; this subpackage re-exports the *typed* registries used
-across HyMo so import sites are clean.
-"""
+"""Public registry: named-constructor pattern for models, optimizers, etc."""
 
 from __future__ import annotations
+from typing import Any, Callable, TypeVar
 
-from hymo.utils.registry import Registry
+F = TypeVar("F", bound=Callable[..., Any])
 
-# Typed, module-level registries. Constructors register themselves at
-# import time (see e.g. ``hymo.models.fusionllm``).
-MODELS: Registry = Registry("model")
-OPTIMIZERS: Registry = Registry("optimizer")
-SCHEDULERS: Registry = Registry("scheduler")
-TOKENIZERS: Registry = Registry("tokenizer")
-DATA_SOURCES: Registry = Registry("data_source")
-CALLBACKS: Registry = Registry("callback")
+class Registry(dict[str, Callable[..., Any]]):
+    def __init__(self, name: str) -> None:
+        super().__init__()
+        self.name = name
+
+    def register(self, name: str) -> Callable[[F], F]:
+        def decorator(fn: F) -> F:
+            self[name] = fn
+            return fn
+        return decorator
+
+    def build(self, name: str, *args: Any, **kwargs: Any) -> Any:
+        return self[name](*args, **kwargs)
+
+    def has(self, name: str) -> bool:
+        return name in self
+
+MODELS = Registry("model")
+OPTIMIZERS = Registry("optimizer")
+SCHEDULERS = Registry("scheduler")
+TOKENIZERS = Registry("tokenizer")
+DATA_SOURCES = Registry("data_source")
 
 __all__ = [
     "MODELS",
@@ -24,6 +34,5 @@ __all__ = [
     "SCHEDULERS",
     "TOKENIZERS",
     "DATA_SOURCES",
-    "CALLBACKS",
     "Registry",
 ]

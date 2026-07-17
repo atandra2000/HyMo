@@ -1,11 +1,4 @@
-"""Tests for the :mod:`hymo.core.config` module.
-
-Covers:
-- Default values match the v1.0 spec.
-- Validation rejects bad values.
-- Round-trip via YAML.
-- The 5-derivative pattern.
-"""
+"""Tests for the :mod:`hymo.core.config` module."""
 
 from __future__ import annotations
 
@@ -31,13 +24,8 @@ from hymo.core.exceptions import ConfigValidationError
 FIXTURES = Path(__file__).parent.parent / "fixtures"
 
 
-# ----------------------------------------------------------------------
-# Default values
-# ----------------------------------------------------------------------
-
-
 class TestModelConfigDefaults:
-    """The default :class:`ModelConfig` is the v1.0 primary spec."""
+    """Verify default ModelConfig matches configuration specifications."""
 
     def test_vocab_size_is_64256(self) -> None:
         assert ModelConfig().vocab_size == 64_256
@@ -73,7 +61,6 @@ class TestModelConfigDefaults:
         assert tuple(m.mtp_loss_weights) == (0.3, 0.1)
 
     def test_nope_hybrid_disabled_by_default(self) -> None:
-        """CR-12: v1.0 ships with NoPE-hybrid off."""
         m = ModelConfig()
         assert m.nope_hybrid_gdn_enabled is False
         assert m.nope_hybrid_gdn_positions == frozenset()
@@ -95,7 +82,7 @@ class TestModelConfigDefaults:
 
 
 class TestOptimizerConfigDefaults:
-    """The default :class:`OptimizerConfig` is the v1.0 spec."""
+    """Verify default OptimizerConfig matches configuration specifications."""
 
     def test_muon_lr_002(self) -> None:
         assert OptimizerConfig().muon_lr == 0.02
@@ -118,6 +105,8 @@ class TestOptimizerConfigDefaults:
 
 
 class TestSchedulerConfigDefaults:
+    """Verify default SchedulerConfig settings."""
+
     def test_57220_steps(self) -> None:
         assert SchedulerConfig().total_steps == 57_220
 
@@ -141,6 +130,8 @@ class TestSchedulerConfigDefaults:
 
 
 class TestTrainingConfigDefaults:
+    """Verify default TrainingConfig settings."""
+
     def test_micro_batch_4(self) -> None:
         assert TrainingConfig().micro_batch_size == 4
 
@@ -151,7 +142,6 @@ class TestTrainingConfigDefaults:
         assert TrainingConfig().world_size == 4
 
     def test_per_step_tokens_524288(self) -> None:
-        """4 GPU * 4 micro * 8 grad_accum * 4096 seq = 524,288."""
         t = TrainingConfig()
         assert t.per_step_tokens == 524_288
 
@@ -162,7 +152,6 @@ class TestTrainingConfigDefaults:
         assert TrainingConfig().eval_interval == 2_000
 
     def test_optimizations_on_by_default(self) -> None:
-        """The 4 §12a optimizations are required for the 5-7 day wall-clock."""
         t = TrainingConfig()
         assert t.fused_gdn is True
         assert t.moe_mixed_precision is True
@@ -170,16 +159,12 @@ class TestTrainingConfigDefaults:
         assert t.cuda_graphs_mla is True
 
     def test_consecutive_nan_limit_5(self) -> None:
-        """MISS-9: abort on 5 consecutive NaN steps."""
         assert TrainingConfig().consecutive_nan_limit == 5
 
 
-# ----------------------------------------------------------------------
-# Immutability
-# ----------------------------------------------------------------------
-
-
 class TestFrozenDataclasses:
+    """Verify dataclasses are frozen and prevent mutation."""
+
     def test_model_config_is_frozen(self) -> None:
         with pytest.raises(FrozenInstanceError):
             ModelConfig().dim = 1024  # type: ignore[misc]
@@ -194,12 +179,9 @@ class TestFrozenDataclasses:
             c.model = ModelConfig()  # type: ignore[misc]
 
 
-# ----------------------------------------------------------------------
-# Validation
-# ----------------------------------------------------------------------
-
-
 class TestValidation:
+    """Verify validator checking on input fields."""
+
     @pytest.mark.parametrize("v", [0, -1, -100])
     def test_vocab_size_must_be_positive(self, v: int) -> None:
         with pytest.raises(ConfigValidationError):
@@ -211,7 +193,7 @@ class TestValidation:
 
     def test_n_kv_groups_must_divide_n_heads(self) -> None:
         with pytest.raises(ConfigValidationError):
-            ModelConfig(n_heads=15, n_kv_groups=4)  # 15 not divisible by 4
+            ModelConfig(n_heads=15, n_kv_groups=4)
 
     def test_qk_rope_plus_nope_equals_head_dim(self) -> None:
         with pytest.raises(ConfigValidationError):
@@ -226,8 +208,6 @@ class TestValidation:
             ModelConfig(mtp_depth=1, mtp_loss_weights=(-0.1,))
 
     def test_logit_softcap_must_be_non_negative(self) -> None:
-        # ``logit_softcap == 0`` means "disabled" (no tanh clamp), which
-        # is the supported opt-out path (test_softcap_disabled).
         with pytest.raises(ConfigValidationError):
             ModelConfig(logit_softcap=-1)
 
@@ -260,12 +240,9 @@ class TestValidation:
             RunConfig(seed=-1)
 
 
-# ----------------------------------------------------------------------
-# YAML round-trip
-# ----------------------------------------------------------------------
-
-
 class TestYamlRoundTrip:
+    """Verify loading from and writing to YAML files."""
+
     def test_loads_default_yaml(self) -> None:
         config = load_config(FIXTURES / "tiny_hymo.yaml")
         assert config.model.n_layers == 4
@@ -294,23 +271,18 @@ class TestYamlRoundTrip:
 
     def test_load_missing_file_raises(self, tmp_path: Path) -> None:
         from hymo.core.exceptions import ConfigNotFoundError
-
         with pytest.raises(ConfigNotFoundError):
             load_config(tmp_path / "does_not_exist.yaml")
 
 
-# ----------------------------------------------------------------------
-# Derivation
-# ----------------------------------------------------------------------
-
-
 class TestDerivation:
+    """Verify configuration derivation behaves correctly."""
+
     def test_derive_with_replace(self) -> None:
         c = HyMoConfig()
         c2 = replace(c, run=replace(c.run, name="hymo-debug"))
         assert c.run.name == "hymo-v1.0"
         assert c2.run.name == "hymo-debug"
-        # Other fields unchanged
         assert c2.model.n_layers == c.model.n_layers
 
     def test_derive_config_helper(self) -> None:
@@ -321,11 +293,11 @@ class TestDerivation:
         )
         assert c2.run.name == "hymo-ablation-A"
         assert c2.run.seed == 123
-        assert c2.model.n_layers == 32  # unchanged
+        assert c2.model.n_layers == 32
 
     def test_derive_returns_new_instance(self) -> None:
         c = HyMoConfig()
         c2 = derive_config(c, run=replace(c.run, name="x"))
         assert c is not c2
         assert c.run is not c2.run
-        assert c.model is c2.model  # model config is shared
+        assert c.model is c2.model

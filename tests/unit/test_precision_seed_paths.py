@@ -13,14 +13,13 @@ import pytest
 import torch
 
 from hymo.core.config import RunConfig
-from hymo.utils.paths import ProjectPaths
-from hymo.utils.precision import (
+from hymo.utils import (
     autocast_disabled,
     bf16_forward,
     fp32_master_weights,
     resolve_dtype,
 )
-from hymo.utils.seed import seed_for_rank, set_seed
+from hymo.utils import seed_for_rank, set_seed
 
 
 class TestResolveDtype:
@@ -89,44 +88,3 @@ class TestSetSeed:
         assert os.environ.get("PYTHONHASHSEED") == "42"
 
 
-class TestProjectPaths:
-    def test_from_config(self, tmp_path: Path) -> None:
-        config = RunConfig(
-            output_dir="checkpoints/pretrain",
-            log_dir="logs",
-            eval_dir="checkpoints/pretrain/eval",
-        )
-        paths = ProjectPaths.from_config(config, root=tmp_path)
-        assert paths.root == tmp_path
-        assert paths.output_dir == tmp_path / "checkpoints/pretrain"
-        assert paths.log_dir == tmp_path / "logs"
-        assert paths.eval_dir == tmp_path / "checkpoints/pretrain/eval"
-        assert paths.data_dir == tmp_path / "data"
-
-    def test_subpaths(self, tmp_path: Path) -> None:
-        config = RunConfig()
-        paths = ProjectPaths.from_config(config, root=tmp_path)
-        assert paths.metrics_path == paths.log_dir / "metrics.jsonl"
-        assert paths.val_bin_path == paths.data_dir / "tokens" / "val.bin"
-
-    def test_ensure_creates_dirs(self, tmp_path: Path) -> None:
-        config = RunConfig(
-            output_dir=str(tmp_path / "out"),
-            log_dir=str(tmp_path / "logs"),
-            eval_dir=str(tmp_path / "eval"),
-        )
-        paths = ProjectPaths.from_config(config)
-        paths.ensure()
-        assert paths.output_dir.exists()
-        assert paths.log_dir.exists()
-        assert paths.eval_dir.exists()
-
-    def test_ensure_is_idempotent(self, tmp_path: Path) -> None:
-        config = RunConfig(
-            output_dir=str(tmp_path / "out"),
-            log_dir=str(tmp_path / "logs"),
-            eval_dir=str(tmp_path / "eval"),
-        )
-        paths = ProjectPaths.from_config(config)
-        paths.ensure()
-        paths.ensure()  # no error

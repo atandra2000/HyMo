@@ -1,14 +1,17 @@
-"""Tests for the :mod:`hymo.data.config` and data placeholders."""
+"""Tests for the :mod:`hymo.data` module (Phase 4)."""
 
 from __future__ import annotations
 
 from pathlib import Path
 
+import numpy as np
 import pytest
+import torch
 
 from hymo.core.exceptions import (
     ConfigNotFoundError,
     ConfigValidationError,
+    TokenizerError,
 )
 from hymo.data import (
     BYTE_VOCAB_SIZE,
@@ -32,6 +35,8 @@ FIXTURES = Path(__file__).parent.parent / "fixtures"
 
 
 class TestSourceSpec:
+    """Verify SourceSpec validation checks."""
+
     def test_construct(self) -> None:
         s = SourceSpec(id="fineweb_edu_q3", weight=0.5)
         assert s.id == "fineweb_edu_q3"
@@ -47,13 +52,15 @@ class TestSourceSpec:
         with pytest.raises(ConfigValidationError):
             SourceSpec(id="x", weight=-0.1)
         with pytest.raises(ConfigValidationError):
-            SourceSpec(id="x", weight=1.5)  # > 1.0
+            SourceSpec(id="x", weight=1.5)
 
 
 class TestDataConfig:
+    """Verify DataConfig source settings and proportions."""
+
     def test_default_construct(self) -> None:
         with pytest.raises(ConfigValidationError):
-            DataConfig()  # needs at least one source
+            DataConfig()
 
     def test_single_source(self) -> None:
         c = DataConfig(sources=(SourceSpec(id="x", weight=1.0),))
@@ -89,7 +96,6 @@ class TestDataConfig:
             )
 
     def test_fractions_must_sum_to_one(self) -> None:
-        # 0.5 + 0.3 + 0.0 = 0.8, not 1.0 — must raise.
         with pytest.raises(ConfigValidationError):
             DataConfig(
                 sources=(SourceSpec(id="a", weight=1.0),),
@@ -100,6 +106,8 @@ class TestDataConfig:
 
 
 class TestYamlRoundTrip:
+    """Verify data config YAML round trip load/save behaviors."""
+
     def test_load_default_yaml(self) -> None:
         c = load_data_config(FIXTURES / "tiny_mixture.yaml")
         assert len(c.sources) == 1
@@ -134,6 +142,8 @@ class TestYamlRoundTrip:
 
 
 class TestShardingConfig:
+    """Verify ShardingConfig settings and constraints."""
+
     def test_defaults(self) -> None:
         s = ShardingConfig()
         assert s.shard_size_tokens == 50_000_000
@@ -151,6 +161,8 @@ class TestShardingConfig:
 
 
 class TestTokenizationConfig:
+    """Verify TokenizationConfig settings."""
+
     def test_defaults(self) -> None:
         t = TokenizationConfig()
         assert t.vocab_size == 64_256
@@ -164,6 +176,8 @@ class TestTokenizationConfig:
 
 
 class TestDedupConfig:
+    """Verify DedupConfig parameters and methods."""
+
     def test_defaults(self) -> None:
         d = DedupConfig()
         assert d.enabled is True
@@ -182,6 +196,8 @@ class TestDedupConfig:
 
 
 class TestQualityConfig:
+    """Verify QualityConfig settings."""
+
     def test_defaults(self) -> None:
         q = QualityConfig()
         assert q.drop_empty is True
@@ -189,6 +205,8 @@ class TestQualityConfig:
 
 
 class TestExtendedTokenizer:
+    """Verify ExtendedTokenizer BPE + byte-fallback behaviors."""
+
     def test_construct(self, tmp_path: Path) -> None:
         t = ExtendedTokenizer(tmp_path / "tok.json")
         assert t.path == tmp_path / "tok.json"
@@ -196,65 +214,86 @@ class TestExtendedTokenizer:
         assert t.eos_token_id == 0
         assert t.pad_token_id == 2
 
-    def test_load_raises(self, tmp_path: Path) -> None:
-        t = ExtendedTokenizer(tmp_path / "tok.json")
-        from hymo.core.exceptions import NotImplementedError_
-
-        with pytest.raises(NotImplementedError_):
+    def test_load_missing_file_raises(self, tmp_path: Path) -> None:
+        t = ExtendedTokenizer(tmp_path / "does_not_exist.json")
+        with pytest.raises(TokenizerError):
             t.load()
-
-    def test_encode_raises(self, tmp_path: Path) -> None:
-        t = ExtendedTokenizer(tmp_path / "tok.json")
-        from hymo.core.exceptions import NotImplementedError_
-
-        with pytest.raises(NotImplementedError_):
-            t.encode("hello world")
 
     def test_registered(self) -> None:
         assert TOKENIZERS.has("hymo-bpe-64k")
 
 
 class TestShardWriter:
+    """Verify ShardWriter token packing and padding outputs."""
+
     def test_construct(self, tmp_path: Path) -> None:
         w = ShardWriter(output_dir=tmp_path, shard_size_tokens=1024)
         assert w.output_dir == tmp_path
         assert w.shard_size_tokens == 1024
 
-    def test_write_shard_raises(self, tmp_path: Path) -> None:
-        import numpy as np
+    def test_write_and_read_shard(self, tmp_path: Path) -> None:
+        w = ShardWriter(output_dir=tmp_path, shard_size_tokens=100)
+        tokens = np.arange(100, dtype=np.uint32)
+        path = w.write_shard(0, tokens)
+        assert path.exists()
+        assert path.name == "shard_00000.bin"
+        loaded = np.fromfile(path, dtype=np.uint32)
+        np.testing.assert_array_equal(loaded, tokens)
 
-        w = ShardWriter(output_dir=tmp_path, shard_size_tokens=1024)
-        from hymo.core.exceptions import NotImplementedError_
-
-        with pytest.raises(NotImplementedError_):
-            w.write_shard(0, np.zeros(100, dtype=np.uint32))
+    def test_write_batched(self, tmp_path: Path) -> None:
+        w = ShardWriter(output_dir=tmp_path, shard_size_tokens=50)
+        tokens = np.arange(120, dtype=np.uint32)
+        paths = w.write_batched(tokens)
+        assert len(paths) == 3
+        assert all(p.exists() for p in paths)
+        total = sum(np.fromfile(p, dtype=np.uint32).size for p in paths)
+        assert total == 150
 
 
 class TestShardDataset:
-    def test_construct(self, tmp_path: Path) -> None:
-        d = ShardDataset(tmp_path, max_seq_len=64)
-        assert d.shards_dir == tmp_path
-        assert d.max_seq_len == 64
+    """Verify ShardDataset slicing input/targets sequence windows."""
 
-    def test_len_raises(self, tmp_path: Path) -> None:
+    def test_empty_dir(self, tmp_path: Path) -> None:
         d = ShardDataset(tmp_path, max_seq_len=64)
-        from hymo.core.exceptions import NotImplementedError_
+        assert len(d) == 0
 
-        with pytest.raises(NotImplementedError_):
-            len(d)
+    def test_with_shards(self, tmp_path: Path) -> None:
+        w = ShardWriter(output_dir=tmp_path, shard_size_tokens=200)
+        w.write_shard(0, np.arange(200, dtype=np.uint32))
+        d = ShardDataset(tmp_path, max_seq_len=8)
+        assert len(d) > 0
+        tokens, targets = d[0]
+        assert tokens.shape == (8,)
+        assert targets.shape == (8,)
+        assert torch.equal(tokens[1:], targets[:-1])
 
 
 class TestDataLoaderBuilder:
-    def test_construct(self, tmp_path: Path) -> None:
-        d = ShardDataset(tmp_path, max_seq_len=64)
+    """Verify DataLoaderBuilder constructs partitioned dataloaders."""
+
+    def test_construct(self, tmp_path: Path, monkeypatch: pytest.MonkeyPatch) -> None:
+        # Force num_workers=0 (single-process DataLoader) so PyTorch does not
+        # attempt shared-memory IPC, which is blocked in sandbox / CI
+        # environments.  Production behaviour is unchanged; only os.cpu_count
+        # inside the sharding module is stubbed for this test.
+        import hymo.data.sharding as _sharding_mod
+
+        monkeypatch.setattr(_sharding_mod.os, "cpu_count", lambda: 0)
+
+        w = ShardWriter(output_dir=tmp_path, shard_size_tokens=200)
+        w.write_shard(0, np.arange(200, dtype=np.uint32))
+        d = ShardDataset(tmp_path, max_seq_len=8)
         from hymo.core.config import TrainingConfig
 
-        b = DataLoaderBuilder(d, TrainingConfig())
-        assert b.dataset is d
+        b = DataLoaderBuilder(d, TrainingConfig(world_size=1))
+        loader = b.build()
+        batch = next(iter(loader))
+        assert len(batch) == 2
+        assert batch[0].shape[0] == TrainingConfig().micro_batch_size
 
 
 class TestDataSourcesRegistered:
-    """All 10 sources should be registered on import."""
+    """Verify standard datamix sources are properly registered."""
 
     def test_10_sources(self) -> None:
         ids = {

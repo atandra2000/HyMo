@@ -45,7 +45,8 @@ dependencies = [
 [project.optional-dependencies]
 # Production training deps — installed only when running the primary 30B run
 train = [
-    "fla>=0.1",                 # fla-org GDN kernel
+    # "fla>=0.1",                 # fla-org GDN kernel (unavailable in standard registry)
+    "triton>=3.0.0; sys_platform == 'linux'", # custom Triton kernel for GDN
     "lm-eval>=0.4.5",           # held-out evaluation harness
     "wandb>=0.17",              # optional: W&B logging
 ]
@@ -111,7 +112,7 @@ mypy_path = "src"
 
 [[tool.mypy.overrides]]
 # torch.* stubs are incomplete; loosen the rules there
-module = ["torch.*"]
+module = ["torch.*", "lm_eval.*", "datasets.*", "tokenizers.*", "fla.*", "tqdm.*"]
 ignore_missing_imports = true
 
 [tool.pytest.ini_options]
@@ -128,4 +129,5 @@ markers = [
     "slow: marks tests as slow (deselect with '-m \"not slow\"')",
     "gpu: marks tests that require a GPU (deselect on CPU-only machines)",
     "integration: marks integration tests that touch multiple modules",
+    "heavy: marks tests that build the production HyMo model (1.86 B params; runs on CI / GPU pod, not on M1 Air)",
 ]

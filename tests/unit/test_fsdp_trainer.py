@@ -1,10 +1,14 @@
-"""Tests for the FSDP and trainer placeholders."""
+"""Tests for the FSDP and trainer."""
 
 from __future__ import annotations
 
-import pytest
+from pathlib import Path
 
-from hymo.core.config import HyMoConfig, load_config
+import numpy as np
+import pytest
+import torch
+
+from hymo.core.config import load_config
 from hymo.core.exceptions import NotImplementedError_
 from hymo.models import HyMo
 from hymo.training import (
@@ -15,18 +19,40 @@ from hymo.training import (
     train_step_result,
     wrap_model_with_fsdp,
 )
-from hymo.utils.callbacks import CallbackList
+
+# ---------------------------------------------------------------------------
+# Helper: create a small val.bin for trainer.evaluate tests
+# ---------------------------------------------------------------------------
+
+
+def _make_val_bin(tmp_path: Path, num_tokens: int = 4096) -> Path:
+    """Write a small validation binary and return its path."""
+    path = tmp_path / "val.bin"
+    tokens = np.random.randint(0, 1024, size=num_tokens, dtype=np.uint32)
+    tokens.tofile(path)
+    return path
 
 
 class TestFSDPPlaceholders:
-    def test_fsdp_auto_wrap_policy_raises(self) -> None:
-        with pytest.raises(NotImplementedError_):
-            fsdp_auto_wrap_policy(None, recurse=True, non_blocking=True)
+    def test_fsdp_auto_wrap_policy_returns_false_for_non_block(self) -> None:
+        """Policy should return False for modules that are not GDN/MLA blocks."""
+        from torch import nn
+        dummy = nn.Linear(4, 4)
+        result = fsdp_auto_wrap_policy(dummy, recurse=True, non_blocking=True)
+        assert result is False
 
+    def test_fsdp_auto_wrap_policy_returns_true_for_gdn(self, tiny_hymo_config) -> None:
+        """Policy should return True when given a GatedDeltaNetBlock."""
+        from hymo.models.gdn import GatedDeltaNetBlock
+        block = GatedDeltaNetBlock(tiny_hymo_config.model, layer_idx=0)
+        assert fsdp_auto_wrap_policy(block, recurse=True, non_blocking=True) is True
+
+    @pytest.mark.heavy
     def test_shard_nor_muon_params_raises(self) -> None:
         with pytest.raises(NotImplementedError_):
             shard_nor_muon_params(None, world_size=4)  # type: ignore[arg-type]
 
+    @pytest.mark.heavy
     def test_wrap_model_with_fsdp_raises(self) -> None:
         config = load_config("configs/hymo_750m.yaml")
         model = HyMo(config.model)
@@ -54,72 +80,90 @@ class TestCheckpointState:
         assert s.best_loss == 2.45
 
 
-class TestTrainerPlaceholder:
-    def test_construct(self) -> None:
-        config = HyMoConfig()
-        model = HyMo(config.model)
-        trainer = Trainer(config, model)
+class TestTrainer:
+    def test_construct(self, tiny_hymo_config) -> None:
+        model = HyMo(tiny_hymo_config.model)
+        trainer = Trainer(tiny_hymo_config, model)
         assert trainer.step == 0
         assert trainer.token_count == 0
         assert trainer.best_loss == float("inf")
-        assert isinstance(trainer.callbacks, CallbackList)
+        assert trainer.optimizers is not None
+        assert trainer.scheduler is not None
 
-    def test_construct_with_callbacks(self) -> None:
-        config = HyMoConfig()
-        model = HyMo(config.model)
-        cb = CallbackList()
-        trainer = Trainer(config, model, callbacks=cb)
-        assert trainer.callbacks is cb
+    def test_train_step(self, tiny_hymo_config) -> None:
+        model = HyMo(tiny_hymo_config.model)
+        trainer = Trainer(tiny_hymo_config, model)
+        B, T = 1, tiny_hymo_config.model.max_seq_len
+        tokens = torch.randint(0, tiny_hymo_config.model.vocab_size, (B, T))
+        targets = torch.randint(0, tiny_hymo_config.model.vocab_size, (B, T))
+        result = trainer.train_step(tokens, targets)
+        assert isinstance(result, train_step_result)
+        assert result.skipped is False
+        assert torch.isfinite(torch.tensor(result.loss))
+        assert result.lr_adamw > 0
+        assert trainer.step == 1
+        assert trainer.token_count == B * T
 
-    def test_train_step_raises(self) -> None:
-        import torch
-
-        config = HyMoConfig()
-        model = HyMo(config.model)
-        trainer = Trainer(config, model)
-        with pytest.raises(NotImplementedError_):
-            trainer.train_step(
-                tokens=torch.zeros(1, 4, dtype=torch.long),
-                targets=torch.zeros(1, 4, dtype=torch.long),
-            )
-
-    def test_save_raises(self) -> None:
-        config = HyMoConfig()
+    def test_save_and_load(self, tiny_hymo_config, tmp_path) -> None:
+        from dataclasses import replace
+        config = replace(tiny_hymo_config, run=replace(tiny_hymo_config.run, output_dir=str(tmp_path)))
         model = HyMo(config.model)
         trainer = Trainer(config, model)
-        with pytest.raises(NotImplementedError):
-            trainer.save()
+        ckpt_path = trainer.save(tag="test_save")
+        assert ckpt_path.exists()
+        # DCP saves a directory, not a single .pt file.
+        assert ckpt_path.is_dir()
 
-    def test_load_raises(self, tmp_path) -> None:
-        config = HyMoConfig()
+        # Load into a fresh trainer.
+        model2 = HyMo(config.model)
+        trainer2 = Trainer(config, model2)
+        step = trainer2.load(ckpt_path)
+        assert step == 0
+        assert trainer2.step == 0
+
+    def test_load_after_training(self, tiny_hymo_config, tmp_path) -> None:
+        from dataclasses import replace
+        config = replace(tiny_hymo_config, run=replace(tiny_hymo_config.run, output_dir=str(tmp_path)))
         model = HyMo(config.model)
         trainer = Trainer(config, model)
-        with pytest.raises(NotImplementedError):
-            trainer.load(tmp_path / "ckpt")
+        B, T = 1, config.model.max_seq_len
+        tokens = torch.randint(0, config.model.vocab_size, (B, T))
+        targets = torch.randint(0, config.model.vocab_size, (B, T))
+        trainer.train_step(tokens, targets)
+        assert trainer.step == 1
 
-    def test_train_raises(self) -> None:
-        config = HyMoConfig()
-        model = HyMo(config.model)
-        trainer = Trainer(config, model)
-        with pytest.raises(NotImplementedError):
-            trainer.train()
+        ckpt_path = trainer.save(tag="step_1")
 
-    def test_evaluate_raises(self) -> None:
-        config = HyMoConfig()
-        model = HyMo(config.model)
-        trainer = Trainer(config, model)
-        with pytest.raises(NotImplementedError):
-            trainer.evaluate()
+        model2 = HyMo(config.model)
+        trainer2 = Trainer(config, model2)
+        trainer2.load(ckpt_path)
+        assert trainer2.step == 1
 
-    def test_make_state(self) -> None:
-        config = HyMoConfig()
-        model = HyMo(config.model)
-        trainer = Trainer(config, model)
-        trainer.step = 100
-        trainer.token_count = 1_000_000
-        state = trainer._make_state()
-        assert state.step == 100
-        assert state.token_count == 1_000_000
+    def test_train_basic(self, tiny_hymo_config) -> None:
+        model = HyMo(tiny_hymo_config.model)
+        trainer = Trainer(tiny_hymo_config, model)
+        B, T = 1, tiny_hymo_config.model.max_seq_len
+        vocab = tiny_hymo_config.model.vocab_size
+
+        def data_iter():
+            while True:
+                yield (
+                    torch.randint(0, vocab, (B, T)),
+                    torch.randint(0, vocab, (B, T)),
+                )
+
+        trainer.train(data_iter(), max_steps=3)
+        assert trainer.step == 3
+
+    def test_evaluate(self, tiny_hymo_config, tmp_path) -> None:
+        model = HyMo(tiny_hymo_config.model)
+        trainer = Trainer(tiny_hymo_config, model)
+        val_path = _make_val_bin(tmp_path)
+        metrics = trainer.evaluate(val_bin_path=val_path)
+        assert isinstance(metrics, dict)
+        assert "val_loss" in metrics
+        assert "val_ppl" in metrics
+        assert torch.isfinite(torch.tensor(metrics["val_loss"]))
 
 
 class TestTrainStepResult:

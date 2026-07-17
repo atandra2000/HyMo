@@ -1,33 +1,7 @@
 """Configuration dataclasses loaded from a single YAML file.
 
-The config is the *only* place where architectural hyperparameters and
-training hyperparameters live. Code reads them via ``config.field``;
-nothing is hardcoded.
-
-Design
-------
-- Every config class is a ``@dataclass(frozen=True)`` so accidental
-  mutation in the training loop is a hard error.
-- All values are validated in :meth:`__post_init__`. The validation
-  raises :class:`hymo.core.exceptions.ConfigValidationError`.
-- Use :func:`dataclasses.replace` to derive variants (e.g. the v1.1
-  ablation configs are derived from the v1.0 config with a few fields
-  changed).
-- Use :func:`load_config` to load from a YAML file.
-- Use :func:`save_config` to dump back to YAML (for snapshotting).
-
-Top-level structure
--------------------
-A single YAML file maps to :class:`HyMoConfig`, which has 5 sub-configs:
-
-- :class:`ModelConfig` — architecture (layers, dim, experts, MTP).
-- :class:`OptimizerConfig` — NorMuon + AdamW hyperparameters.
-- :class:`SchedulerConfig` — joint WSD schedule.
-- :class:`TrainingConfig` — batch size, grad accum, grad clip, ckpt.
-- :class:`RunConfig` — run identity (name, seed, output dir, etc.).
-
-The data pipeline uses a separate :class:`hymo.data.config.DataConfig`
-(see :mod:`hymo.data.config`).
+Contains ModelConfig, OptimizerConfig, SchedulerConfig, TrainingConfig, RunConfig,
+and the top-level HyMoConfig aggregating all sub-configs.
 """
 
 from __future__ import annotations
@@ -36,7 +10,7 @@ from dataclasses import dataclass, field, fields, replace
 from pathlib import Path
 from typing import Any
 
-import yaml
+import yaml  # type: ignore[import-untyped]
 
 from hymo.core.exceptions import (
     ConfigError,
@@ -52,14 +26,10 @@ from hymo.core.types import Step
 
 @dataclass(frozen=True)
 class ModelConfig:
-    """Architectural hyperparameters for the HyMo stack.
-
-    Defaults are the v1.0 primary spec (architecture doc §2.1, §2.4, §2.5,
-    §2.8, §3.1, §5.2). Frozen: derive variants with :func:`dataclasses.replace`.
-    """
+    """Architectural hyperparameters for the HyMo stack (architecture doc §2.1)."""
 
     # Token + sequence
-    vocab_size: int = 64_256            # 64,000 BPE + 256 byte-fallback
+    vocab_size: int = 64_256
     max_seq_len: int = 4_096
 
     # Stack
@@ -69,11 +39,11 @@ class ModelConfig:
 
     # MLA (full attention)
     n_heads: int = 16
-    n_kv_groups: int = 4                # MQA-4
+    n_kv_groups: int = 4
     q_lora_rank: int = 224
     kv_lora_rank: int = 128
     head_dim: int = 128
-    qk_rope_head_dim: int = 32          # 25% partial-RoPE
+    qk_rope_head_dim: int = 32
     qk_nope_head_dim: int = 96
     v_head_dim: int = 128
     rope_theta: float = 10_000.0
@@ -83,9 +53,9 @@ class ModelConfig:
     gdn_d_conv: int = 4
     gdn_headdim: int = 32
     gdn_d_inner: int = 1_280
-    gdn_chunk_size: int = 64            # swept {32,64,128} in v1.1
+    gdn_chunk_size: int = 64
 
-    # NoPE-hybrid — CR-12 mitigation: defaults to OFF for v1.0
+    # NoPE-hybrid
     nope_hybrid_gdn_enabled: bool = False
 
     # MoE
@@ -140,8 +110,6 @@ class ModelConfig:
             )
         if self.mtp_depth < 0:
             raise ConfigValidationError("mtp_depth must be >= 0")
-        # ``mtp_depth == 0`` means MTP is disabled; weights must be empty.
-        # ``mtp_depth > 0`` requires exactly ``mtp_depth`` weights.
         if self.mtp_depth == 0:
             if len(self.mtp_loss_weights) != 0:
                 raise ConfigValidationError(
@@ -155,41 +123,32 @@ class ModelConfig:
             )
         if any(w < 0 for w in self.mtp_loss_weights):
             raise ConfigValidationError("mtp_loss_weights must be non-negative")
-        # ``logit_softcap == 0`` means "disabled" (no tanh clamping).
         if self.logit_softcap < 0:
             raise ConfigValidationError("logit_softcap must be >= 0 (0 disables)")
 
     @property
     def n_mla_layers(self) -> int:
-        """Number of MLA (full attention) layers in the 32-block stack.
-
-        3:1 GDN:MLA → 8 MLA, 24 GDN.
-        """
+        """Number of MLA (full attention) layers."""
         return self.n_layers // 4
 
     @property
     def n_gdn_layers(self) -> int:
-        """Number of GDN (linear attention) layers in the 32-block stack."""
+        """Number of GDN (linear attention) layers."""
         return self.n_layers - self.n_mla_layers
 
     @property
     def mla_positions(self) -> frozenset[int]:
-        """Indices of MLA layers in the stack (positions 0, 4, 8, ...)."""
+        """Indices of MLA layers in the stack."""
         return frozenset(i * 4 for i in range(self.n_mla_layers))
 
     @property
     def gdn_positions(self) -> frozenset[int]:
-        """Indices of GDN layers in the stack (complement of ``mla_positions``)."""
+        """Indices of GDN layers in the stack."""
         return frozenset(i for i in range(self.n_layers) if i not in self.mla_positions)
 
     @property
     def nope_hybrid_gdn_positions(self) -> frozenset[int]:
-        """Indices of GDN layers that get NoPE when the hybrid is enabled.
-
-        These are the 7 GDN layers immediately after each MLA position:
-        ``{3, 7, 11, 15, 19, 23, 27}`` for the 32-layer default. Empty
-        when :attr:`nope_hybrid_gdn_enabled` is ``False``.
-        """
+        """Indices of GDN layers that get NoPE when the hybrid model is enabled."""
         if not self.nope_hybrid_gdn_enabled:
             return frozenset()
         return frozenset(mla - 1 for mla in self.mla_positions if mla > 0)
@@ -197,10 +156,7 @@ class ModelConfig:
 
 @dataclass(frozen=True)
 class OptimizerConfig:
-    """Dual-optimizer hyperparameters (NorMuon + AdamW).
-
-    Defaults are the v1.0 primary spec (architecture doc §5.2).
-    """
+    """Optimizer hyperparameters for Muon and AdamW (architecture doc §5.2)."""
 
     # NorMuon (attention + GDN matrices, 2D dense)
     muon_lr: float = 0.02
@@ -214,12 +170,12 @@ class OptimizerConfig:
     adamw_betas: tuple[float, float] = (0.9, 0.95)
     adamw_eps: float = 1e-8
     adamw_weight_decay: float = 0.0
-    adamw_embed_weight_decay: float = 0.1   # 0.1 for embed; 0.0 for others
+    adamw_embed_weight_decay: float = 0.1
 
-    # Master weight precision (FP32 by default; CR-12)
-    master_weights_dtype: str = "float32"   # "float32" | "bfloat16"
+    # Master weight precision
+    master_weights_dtype: str = "float32"
 
-    # Cautious weight decay (Lion-style mask) — 2D weights only
+    # Cautious weight decay (2D weights only)
     cautious_wd: bool = True
 
     def __post_init__(self) -> None:
@@ -240,18 +196,14 @@ class OptimizerConfig:
 
 @dataclass(frozen=True)
 class SchedulerConfig:
-    """Joint WSD (warmup-stable-decay) scheduler for both optimizers.
-
-    Defaults are the v1.0 quality-first spec (architecture doc §5.3):
-    2% warmup, 83% stable, 15% decay to 0.05× peak.
-    """
+    """Joint WSD (warmup-stable-decay) learning rate scheduler config."""
 
     total_steps: Step = Step(57_220)
     warmup_frac: float = 0.02
     stable_frac: float = 0.83
     decay_frac: float = 0.15
     min_lr_ratio: float = 0.05
-    decay: str = "linear"     # "linear" | "cosine" | "sqrt"
+    decay: str = "linear"
 
     def __post_init__(self) -> None:
         if self.total_steps <= 0:
@@ -289,7 +241,7 @@ class SchedulerConfig:
 
 @dataclass(frozen=True)
 class TrainingConfig:
-    """Training-loop hyperparameters (batch, grad accum, ckpt, etc.)."""
+    """Training-loop hyperparameters and distributed settings."""
 
     # Batch
     micro_batch_size: int = 4
@@ -305,7 +257,7 @@ class TrainingConfig:
     grad_clip: float = 1.0
     grad_norm_threshold: float = 10.0
     loss_nan_skip: bool = True
-    consecutive_nan_limit: int = 5    # MISS-9
+    consecutive_nan_limit: int = 5
     empty_cache_every: int = 100
 
     # Checkpoint
@@ -313,13 +265,13 @@ class TrainingConfig:
     save_interval: int = 4_000
     log_interval: int = 50
     eval_interval: int = 2_000
-    max_keep: int = 2                 # last 2 + best
+    max_keep: int = 2
 
-    # Optimizations (§12a — required for the 5-7 day wall-clock)
-    fused_gdn: bool = True            # H1
-    moe_mixed_precision: bool = True  # H2
-    torch_compile_gdn: bool = True    # H3
-    cuda_graphs_mla: bool = True      # H4
+    # Optimizations
+    fused_gdn: bool = True
+    moe_mixed_precision: bool = True
+    torch_compile_gdn: bool = True
+    cuda_graphs_mla: bool = True
 
     def __post_init__(self) -> None:
         if self.micro_batch_size <= 0:
@@ -353,7 +305,7 @@ class TrainingConfig:
 
 @dataclass(frozen=True)
 class RunConfig:
-    """Run identity: name, seed, output dir, and reproducibility flags."""
+    """Run configuration, seeds, directory names, and reproducibility flags."""
 
     name: str = "hymo-v1.0"
     seed: int = 42
@@ -373,12 +325,7 @@ class RunConfig:
 
 @dataclass(frozen=True)
 class HyMoConfig:
-    """The top-level HyMo configuration.
-
-    Aggregates :class:`ModelConfig`, :class:`OptimizerConfig`,
-    :class:`SchedulerConfig`, :class:`TrainingConfig`, :class:`RunConfig`.
-    Load from a single YAML file via :func:`load_config`.
-    """
+    """Top-level aggregated HyMo configuration loaded from YAML."""
 
     model: ModelConfig = field(default_factory=ModelConfig)
     optimizer: OptimizerConfig = field(default_factory=OptimizerConfig)
@@ -386,16 +333,14 @@ class HyMoConfig:
     training: TrainingConfig = field(default_factory=TrainingConfig)
     run: RunConfig = field(default_factory=RunConfig)
 
-    # ---- Derived properties ---------------------------------------------
-
     @property
     def effective_batch_tokens(self) -> int:
-        """Tokens per optimizer step (= training.per_step_tokens)."""
+        """Tokens per optimizer step."""
         return self.training.per_step_tokens
 
     @property
     def lr_muon_over_adamw(self) -> float:
-        """The preserved lr ratio (architecture doc §5.3: 0.02 / 3e-4 = 66.7)."""
+        """Preserved LR ratio (Muon / AdamW)."""
         return self.optimizer.muon_lr / self.optimizer.adamw_lr
 
 
@@ -409,8 +354,6 @@ def _coerce(value: Any, type_: type) -> Any:
     if value is None:
         return None
     if type_ is bool:
-        # YAML parses 'true'/'false' as bool natively; this handles the
-        # 'True'/'False' string case some loaders emit.
         if isinstance(value, str):
             return value.lower() in ("true", "1", "yes", "on")
         return bool(value)
@@ -437,27 +380,7 @@ def _to_dict(obj: Any) -> Any:
 
 
 def load_config(path: str | Path) -> HyMoConfig:
-    """Load a :class:`HyMoConfig` from a YAML file.
-
-    Parameters
-    ----------
-    path : str or Path
-        Path to the YAML config file.
-
-    Returns
-    -------
-    HyMoConfig
-        The validated top-level config.
-
-    Raises
-    ------
-    ConfigNotFoundError
-        If the file does not exist.
-    ConfigError
-        If the YAML is malformed or the schema is wrong.
-    ConfigValidationError
-        If a field fails its ``__post_init__`` check.
-    """
+    """Load a HyMoConfig from a YAML file path."""
     path = Path(path)
     if not path.exists():
         raise ConfigNotFoundError(f"Config file not found: {path}")
@@ -477,12 +400,12 @@ def load_config(path: str | Path) -> HyMoConfig:
 
 
 def load_config_from_dict(raw: dict[str, Any]) -> HyMoConfig:
-    """Build a :class:`HyMoConfig` from a plain dict (e.g. test fixtures)."""
+    """Build a HyMoConfig from a plain dict (useful for tests)."""
     return _build_config(raw)
 
 
 def _build_config(raw: dict[str, Any]) -> HyMoConfig:
-    """Construct the dataclasses from a raw dict, with type coercion."""
+    """Construct sub-configs from a raw dict with type coercion."""
     try:
         model = ModelConfig(**_filter(raw.get("model", {}), ModelConfig))
         optimizer = OptimizerConfig(
@@ -499,7 +422,7 @@ def _build_config(raw: dict[str, Any]) -> HyMoConfig:
         raise ConfigError(f"Unknown / wrong-type config field: {e}") from e
     except ConfigValidationError:
         raise
-    except Exception as e:  # pragma: no cover — defensive
+    except Exception as e:
         raise ConfigError(f"Failed to build config: {e}") from e
 
     return HyMoConfig(
@@ -512,16 +435,13 @@ def _build_config(raw: dict[str, Any]) -> HyMoConfig:
 
 
 def _filter(raw: dict[str, Any], cls: type) -> dict[str, Any]:
-    """Keep only keys that are fields of ``cls``, coerce simple types."""
+    """Filters dictionary keys to fields of dataclass cls and coerces types."""
     valid = {f.name for f in fields(cls)}
     out: dict[str, Any] = {}
     for k, v in raw.items():
         if k not in valid:
-            # Unknown key — silently ignore (forward-compat). Logged
-            # elsewhere by the registry's "unused config" warning.
             continue
         f = next(f for f in fields(cls) if f.name == k)
-        # Tuple-typed fields need a list → tuple conversion.
         if f.type is tuple or (
             hasattr(f.type, "__origin__") and f.type.__origin__ is tuple
         ):
@@ -531,14 +451,7 @@ def _filter(raw: dict[str, Any], cls: type) -> dict[str, Any]:
 
 
 def save_config(config: HyMoConfig, path: str | Path) -> None:
-    """Dump a :class:`HyMoConfig` to YAML.
-
-    Parameters
-    ----------
-    config : HyMoConfig
-    path : str or Path
-        Destination file. Parent directories are created if missing.
-    """
+    """Dump a HyMoConfig to a YAML file path atomically."""
     path = Path(path)
     path.parent.mkdir(parents=True, exist_ok=True)
     with path.open("w", encoding="utf-8") as f:
@@ -554,16 +467,7 @@ def derive_config(
     training: TrainingConfig | None = None,
     run: RunConfig | None = None,
 ) -> HyMoConfig:
-    """Derive a new config from a base, replacing the given sub-configs.
-
-    Example
-    -------
-    >>> ablate = derive_config(
-    ...     base,
-    ...     model=replace(base.model, n_activated_experts=1),
-    ...     run=replace(base.run, name="hymo-ablation-top1"),
-    ... )
-    """
+    """Derive a new HyMoConfig by replacing selected sub-config properties."""
     return replace(
         base,
         model=model if model is not None else base.model,

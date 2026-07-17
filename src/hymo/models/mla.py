@@ -1,28 +1,18 @@
-"""Multi-Head Latent Attention block (Phase 1 placeholder).
+"""Multi-Head Latent Attention (MLA) block (architecture doc §2.4).
 
-The real implementation (architecture doc §2.4, roadmap B2) wires the
-MLA projection pair ``wq_a → wq_b`` and ``wkv_a → wkv_b`` and applies
-partial-RoPE to the first 25% of head_dim (32 of 128 dim).
-
-The MLA block is the *full attention* primitive. The MQA-4 grouping
-(4 KV groups serving 16 query heads) is implemented in Phase 2.
-
-This placeholder:
-
-- Subclasses :class:`torch.nn.Module` with the right parameter names
-  and shapes.
-- Forward raises :class:`NotImplementedError_`.
-- The :class:`MLABlock` wrapper holds the MLA attention + the
-  :class:`hymo.models.moe.DeepSeekMoE` (or :class:`DenseFFN`) below it.
+Implements DeepSeek-V2/V3 MLA with MQA-4 grouping and partial-RoPE on 25% of head_dim.
+Uses single SDPA call with GQA broadcast to avoid explicit broadcast materialization.
 """
 
 from __future__ import annotations
 
+from typing import cast
+
 import torch
 from torch import nn
+from torch.nn import functional as F
 
 from hymo.core.config import ModelConfig
-from hymo.core.exceptions import NotImplementedError_
 from hymo.models.rope import RotaryEmbedding
 
 __all__ = ["MultiHeadLatentAttention", "MLABlock"]
@@ -31,12 +21,9 @@ __all__ = ["MultiHeadLatentAttention", "MLABlock"]
 class MultiHeadLatentAttention(nn.Module):
     """Multi-Head Latent Attention (MLA) with MQA-4 grouping.
 
-    Architecture doc §2.4. Phase 1 placeholder.
-
-    Parameters
-    ----------
-    config : ModelConfig
-    layer_idx : int
+    Features decoupled RoPE on 25% of the head dimension and low-rank compression:
+    - Query: x -> wq_a -> RMSNorm -> wq_b -> q (split into q_nope and q_pe).
+    - KV: x -> wkv_a -> (kv_latent, k_pe), and kv_latent -> RMSNorm -> wkv_b -> (k_nope, v).
     """
 
     def __init__(self, config: ModelConfig, layer_idx: int = 0) -> None:
@@ -52,14 +39,14 @@ class MultiHeadLatentAttention(nn.Module):
         q_lora_rank = config.q_lora_rank
         v_head_dim = config.v_head_dim
 
-        # Query: low-rank projection (q_lora) then full projection (wq_b).
+        # Query path projection
         self.wq_a = nn.Linear(d, q_lora_rank, bias=False)
         self.q_norm = nn.RMSNorm(q_lora_rank)
         self.wq_b = nn.Linear(
             q_lora_rank, n_heads * (qk_rope_head_dim + qk_nope_head_dim), bias=False
         )
 
-        # KV: low-rank projection (wkv_a) then full projection (wkv_b).
+        # KV compression. wkv_a produces joint latent & key position embedding
         self.wkv_a = nn.Linear(d, kv_lora_rank + qk_rope_head_dim, bias=False)
         self.kv_norm = nn.RMSNorm(kv_lora_rank)
         self.wkv_b = nn.Linear(
@@ -68,14 +55,18 @@ class MultiHeadLatentAttention(nn.Module):
             bias=False,
         )
 
-        # Output projection.
+        # Output projection
         self.wo = nn.Linear(n_heads * v_head_dim, d, bias=False)
 
-        # Per-head query/key RMSNorms.
-        self.q_norm_qk = nn.Parameter(torch.ones(qk_rope_head_dim + qk_nope_head_dim))
-        self.k_norm_qk = nn.Parameter(torch.ones(qk_rope_head_dim))
+        # Per-head RMSNorm scaling applied post-split
+        self.q_norm_qk = nn.Parameter(
+            torch.ones(n_heads * (qk_rope_head_dim + qk_nope_head_dim))
+        )
+        self.k_norm_qk = nn.Parameter(
+            torch.ones(n_kv_groups * qk_rope_head_dim)
+        )
 
-        # RoPE.
+        # Decoupled Rotary Position Embedding
         self.rope = RotaryEmbedding(
             head_dim=qk_rope_head_dim,
             max_seq_len=config.max_seq_len,
@@ -90,43 +81,91 @@ class MultiHeadLatentAttention(nn.Module):
     def n_kv_groups(self) -> int:
         return self._config.n_kv_groups
 
+    @property
+    def qk_rope_head_dim(self) -> int:
+        return self._config.qk_rope_head_dim
+
+    @property
+    def qk_nope_head_dim(self) -> int:
+        return self._config.qk_nope_head_dim
+
+    @property
+    def v_head_dim(self) -> int:
+        return self._config.v_head_dim
+
     def forward(self, x: torch.Tensor) -> torch.Tensor:
-        """Phase 1 placeholder — raises :class:`NotImplementedError_`."""
-        raise NotImplementedError_(
-            "MultiHeadLatentAttention.forward is a Phase 1 placeholder; "
-            "the real implementation lands in Phase 2 (design §2.4, "
-            "roadmap B2)."
+        """Forward pass for MLA mapping input (B, T, d) -> (B, T, d)."""
+        B, T, _ = x.shape
+        H, G = self.n_heads, self.n_kv_groups
+        D_pe, D_nope, D_v = (
+            self.qk_rope_head_dim, self.qk_nope_head_dim, self.v_head_dim
         )
+
+        # Query path: compress -> scale -> split to decoupled RoPE / nope
+        q_latent = self.q_norm(self.wq_a(x))
+        q = self.wq_b(q_latent)
+        head_dim_q = D_pe + D_nope
+        q = q.view(B, T, H, head_dim_q) * self.q_norm_qk.view(1, 1, H, head_dim_q)
+        q_pe = q[..., :D_pe]
+        q_nope = q[..., D_pe:]
+        q_pe_rot = self.rope.apply_rope(
+            q_pe.permute(0, 2, 1, 3)
+        ).permute(0, 2, 1, 3)
+
+        # KV path: compress to joint latent & shared key position (k_pe)
+        kv = self.wkv_a(x)
+        kv_latent, k_pe = kv.split(
+            [self._config.kv_lora_rank, D_pe], dim=-1
+        )
+        kv_latent = self.kv_norm(kv_latent)
+        kv_out = self.wkv_b(kv_latent).view(B, T, G, D_nope + D_v)
+        k_nope = kv_out[..., :D_nope]
+        v = kv_out[..., D_nope:]
+        # Scale and apply RoPE to the shared position key k_pe across groups
+        k_pe_normed = k_pe.unsqueeze(2) * self.k_norm_qk.view(1, 1, G, D_pe)
+        k_pe_rot = self.rope.apply_rope(
+            k_pe_normed.permute(0, 2, 1, 3)
+        ).permute(0, 2, 1, 3)
+
+        # Reconstruct keys and queries by concatenating position-encoded and non-position-encoded components
+        q_assembled = torch.cat([q_pe_rot, q_nope], dim=-1)
+        k_assembled = torch.cat([k_pe_rot, k_nope], dim=-1)
+
+        # SDPA with MQA-4 broadcast. Prefers hardware GQA support (PyTorch >= 2.5), otherwise falls back.
+        q_sdpa = q_assembled.permute(0, 2, 1, 3)
+        k_sdpa = k_assembled.permute(0, 2, 1, 3)
+        v_sdpa = v.permute(0, 2, 1, 3)
+        heads_per_group = H // G
+        try:
+            out = F.scaled_dot_product_attention(
+                q_sdpa, k_sdpa, v_sdpa,
+                enable_gqa=True,
+            )
+        except (TypeError, RuntimeError):
+            k_sdpa = k_sdpa.repeat_interleave(heads_per_group, dim=1)
+            v_sdpa = v_sdpa.repeat_interleave(heads_per_group, dim=1)
+            out = F.scaled_dot_product_attention(q_sdpa, k_sdpa, v_sdpa)
+        out = out.permute(0, 2, 1, 3).contiguous().view(B, T, H * D_v)
+        y = self.wo(out)
+        return cast(torch.Tensor, y)
 
 
 class MLABlock(nn.Module):
-    """MLA + MoE + residual + norms wrapper.
-
-    Architecture doc §2.4. The MLA block is the *full attention*
-    primitive. The :class:`hymo.models.moe.DeepSeekMoE` below it is
-    the asymmetric feed-forward block (MoE is restricted to MLA blocks
-    per design §2.3 / §2.5).
-
-    Phase 1 placeholder. The MoE submodule is also a placeholder.
-    """
+    """MLA Block combining latent attention, MoE feed-forward, pre-norms, and residuals."""
 
     def __init__(self, config: ModelConfig, layer_idx: int = 0) -> None:
         super().__init__()
         self.layer_idx = layer_idx
         self._config = config
-        # Lazy import to avoid circular dependency at module load time.
         from hymo.models.moe import DeepSeekMoE
 
         self.attn_norm = nn.RMSNorm(config.dim)
         self.attn = MultiHeadLatentAttention(config, layer_idx=layer_idx)
         self.moe_norm = nn.RMSNorm(config.dim)
-        # MoE-on-MLA-only is the v1.0 primary spec; see CR-12 mitigation.
         self.moe = DeepSeekMoE(config, layer_idx=layer_idx)
 
     def forward(self, x: torch.Tensor) -> torch.Tensor:
-        """Phase 1 placeholder — raises :class:`NotImplementedError_`."""
-        raise NotImplementedError_(
-            "MLABlock.forward is a Phase 1 placeholder; "
-            "the real implementation lands in Phase 2 (design §2.4, "
-            "roadmap B2)."
-        )
+        """Forward pass applying pre-norm Attention followed by pre-norm MoE."""
+        x = x + self.attn(self.attn_norm(x))
+        x = x + self.moe(self.moe_norm(x))
+        return x

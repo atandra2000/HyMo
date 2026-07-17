@@ -33,3 +33,22 @@ logs/
 # Local secrets
 .env
 .envrc
+
+# Benchmarks
+.benchmarks/
+
+# AI/Agent states
+.remember/
+
+# Model weights / Checkpoints
+*.pt
+*.pth
+*.safetensors
+*.ckpt
+
+# Other outputs
+outputs/
+results/
+
+# User personal documentation
+learning_docs/

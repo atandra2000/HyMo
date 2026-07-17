@@ -18,7 +18,7 @@ from hymo.core.exceptions import (
     ShapeError,
     TokenizerError,
 )
-from hymo.core.types import (
+from hymo.core import (
     ExpertIndex,
     LayerIndex,
     MicroStep,

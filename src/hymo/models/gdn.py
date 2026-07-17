@@ -1,49 +1,29 @@
-"""Gated Delta Net block (Phase 1 placeholder).
+"""Gated Delta Net block (architecture doc §2.3).
 
-The real implementation (architecture doc §2.3, roadmap B1) wires
-:func:`fla.layers.gated_delta_net.chunk_gated_delta_rule` for the
-recurrence and supports the per-layer ``use_rope`` flag for the
-NoPE-hybrid pattern.
-
-This placeholder:
-
-- Subclasses :class:`torch.nn.Module` with the right parameter names
-  and shapes (so the FSDP wrapper in Phase 3 can wrap it correctly).
-- Forwards raise :class:`hymo.core.exceptions.NotImplementedError_`.
-- The :class:`hymo.core.exceptions.HyMoError` inheritance lets callers
-  catch the placeholder uniformly.
+Implements the GDN linear-attention recurrence in pure-PyTorch.
+Can fall back to a fused Triton kernel if `fla` is installed.
 """
 
 from __future__ import annotations
 
+from typing import cast
+
 import torch
 from torch import nn
+from torch.nn import functional as F
 
 from hymo.core.config import ModelConfig
-from hymo.core.exceptions import NotImplementedError_
 from hymo.models.rope import RotaryEmbedding
 
 __all__ = ["GatedDeltaNetBlock"]
 
 
 class GatedDeltaNetBlock(nn.Module):
-    """Gated Delta Net (linear attention) block.
+    """Gated Delta Net (linear attention) block (architecture doc §2.3)."""
 
-    Architecture doc §2.3. Phase 1 placeholder.
-
-    Parameters
-    ----------
-    config : ModelConfig
-        The model config.
-    layer_idx : int
-        The layer index in the 32-block stack (0..31).
-    use_rope : bool
-        Whether to apply RoPE. Defaults to ``True``. For the NoPE-hybrid
-        pattern (CR-12, default OFF for v1.0), set to ``False`` on the
-        7 GDN positions {3, 7, 11, 15, 19, 23, 27}.
-    """
-
-    def __init__(self, config: ModelConfig, layer_idx: int, use_rope: bool = True) -> None:
+    def __init__(
+        self, config: ModelConfig, layer_idx: int, use_rope: bool = True
+    ) -> None:
         super().__init__()
         self.layer_idx = layer_idx
         self.use_rope = use_rope
@@ -56,8 +36,8 @@ class GatedDeltaNetBlock(nn.Module):
         headdim = config.gdn_headdim
         n_heads = d_inner // headdim
 
-        # Linear projections (the real weights live in Phase 2).
-        self.in_proj = nn.Linear(d_model, 6 * d_inner, bias=False)
+        # Projections & Convolutions
+        self.in_proj = nn.Linear(d_model, d_inner, bias=False)
         self.conv1d = nn.Conv1d(
             d_inner, d_inner, d_conv, groups=d_inner, padding=d_conv - 1, bias=False
         )
@@ -66,13 +46,17 @@ class GatedDeltaNetBlock(nn.Module):
         self.dt_proj = nn.Linear(d_inner, n_heads, bias=False)
         self.g_proj = nn.Linear(d_inner, d_inner, bias=False)
         self.out_proj = nn.Linear(d_inner, d_model, bias=False)
+        self.skip_proj = nn.Linear(d_model, d_model, bias=False)
 
-        # Scalar parameters (no weight decay).
-        self.A_log = nn.Parameter(torch.zeros(n_heads * d_state))
+        # Decay log parameters initialized per-head
+        a_init = torch.log(
+            torch.arange(1, n_heads + 1, dtype=torch.float32).repeat_interleave(d_state)
+        )
+        self.A_log = nn.Parameter(a_init)
         self.D = nn.Parameter(torch.ones(n_heads))
         self.dt_bias = nn.Parameter(torch.zeros(n_heads))
 
-        # Optional RoPE.
+        # Optional Rotary Position Embedding
         self.rope: RotaryEmbedding | None
         if use_rope:
             self.rope = RotaryEmbedding(
@@ -91,16 +75,104 @@ class GatedDeltaNetBlock(nn.Module):
     def d_inner(self) -> int:
         return self._config.gdn_d_inner
 
+    @property
+    def d_state(self) -> int:
+        return self._config.gdn_d_state
+
+    @property
+    def headdim(self) -> int:
+        return self._config.gdn_headdim
+
+    @property
+    def chunk_size(self) -> int:
+        return self._config.gdn_chunk_size
+
+    def _gated_delta_rule(
+        self,
+        v: torch.Tensor,
+        b: torch.Tensor,
+        c: torch.Tensor,
+        g: torch.Tensor,
+    ) -> torch.Tensor:
+        """Pure-PyTorch gated delta rule recurrence (h_t = exp(ΔA_t) * h_{t-1} + b_t * v_t)."""
+        B, T, H, D = v.shape
+        S = b.shape[-1]
+        A = -torch.exp(self.A_log.float()).view(H, S)
+
+        # State recurrence
+        h = v.new_zeros(B, H, S, D, dtype=torch.float32)
+        o_list: list[torch.Tensor] = []
+        for t in range(T):
+            v_t = v[:, t].float()
+            b_t = b[:, t].float()
+            c_t = c[:, t].float()
+            g_t = g[:, t].float().unsqueeze(-1)
+            alpha = torch.exp(g_t * A)
+            h = alpha.unsqueeze(-1) * h + b_t.unsqueeze(-1) * v_t.unsqueeze(-2)
+            o_t = torch.einsum("bhs,bhsd->bhd", c_t, h)
+            o_list.append(o_t)
+        o = torch.stack(o_list, dim=1)
+        return o.to(v.dtype)
+
+    @torch.compile(mode="reduce-overhead")
     def forward(self, x: torch.Tensor) -> torch.Tensor:
-        """Phase 1 placeholder — raises :class:`NotImplementedError_`."""
-        raise NotImplementedError_(
-            "GatedDeltaNetBlock.forward is a Phase 1 placeholder; "
-            "the real implementation lands in Phase 2 (design §2.3, "
-            "roadmap B1)."
-        )
+        """Forward pass for the GDN block mapping (B, T, d_model) -> (B, T, d_model)."""
+        B, T, _ = x.shape
+        H, D, S = self.n_heads, self.headdim, self.d_state
+        d_inner = self.d_inner
+
+        # 1. Input projection
+        v_in = self.in_proj(x)
+
+        # 2. Causal depthwise conv1d over T, followed by SiLU
+        v_conv = self.conv1d(v_in.transpose(1, 2))[:, :, :T]
+        v = F.silu(v_conv.transpose(1, 2))
+
+        # 3. Project state, gates, and decays
+        b_in = self.b_proj(v)
+        c_in = self.c_proj(v)
+        dt_in = self.dt_proj(v)
+        g_in = self.g_proj(v)
+        b = b_in.view(B, T, H, S)
+        c = c_in.view(B, T, H, S)
+        # g_in is (B, T, d_inner) = (B, T, H*D)
+        # Triton kernel and pure-PyTorch fallback both expect per-head scalar gate (B, T, H)
+        g = F.sigmoid(g_in)
+        g_gate = g.view(B, T, H, D).mean(dim=-1)     # (B, T, H) — scalar gate per head
+
+        # 4. RoPE on the first 25% of v
+        v = v.view(B, T, H, D)
+        if self.rope is not None and T > 0:
+            rope_dim = self.rope.head_dim
+            v_for_rope = v[..., :rope_dim].permute(0, 2, 1, 3)
+            v_for_rope = self.rope.apply_rope(v_for_rope)
+            v_for_rope = v_for_rope.permute(0, 2, 1, 3)
+            v = torch.cat([v_for_rope, v[..., rope_dim:]], dim=-1)
+
+        # 5. Gated delta rule (prefers fla, then custom Triton, otherwise pure-PyTorch)
+        try:
+            from fla.layers.gated_delta_net import chunk_gated_delta_rule
+            o = chunk_gated_delta_rule(c, b, v, self.A_log, dt_in, g_gate, self.chunk_size)
+        except ImportError:
+            try:
+                from hymo.models.gdn_triton import triton_gated_delta_rule
+                o = triton_gated_delta_rule(v, b, c, g_gate, self.A_log)
+            except ImportError:
+                o = self._gated_delta_rule(v, b, c, g_gate)
+
+        # 6. Apply skip connection: D (per-head scalar) + element-wise gate over d_inner
+        o = o + self.D.view(1, 1, H, 1) * v
+        # Gate is applied per-head, broadcast over D
+        o = o * g_gate.unsqueeze(-1)              # (B, T, H, 1) → broadcasts over D
+
+        # 7. Output projection and residual skip
+        o_flat = o.view(B, T, d_inner)
+        y = self.out_proj(o_flat) + self.skip_proj(x)
+        return cast(torch.Tensor, y)
 
     def extra_repr(self) -> str:
         return (
             f"layer_idx={self.layer_idx}, use_rope={self.use_rope}, "
-            f"d_inner={self.d_inner}, n_heads={self.n_heads}"
+            f"d_inner={self.d_inner}, n_heads={self.n_heads}, "
+            f"d_state={self.d_state}, headdim={self.headdim}"
         )

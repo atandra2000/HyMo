@@ -14,6 +14,7 @@ from hymo.core.config import (
     load_config_from_dict,
     save_config,
 )
+from hymo.core.config_validation import validate_full_config
 from hymo.core.exceptions import (
     CheckpointCorruptError,
     CheckpointError,
@@ -40,7 +41,6 @@ from hymo.core.types import (
     Step,
     TokenId,
 )
-from hymo.core.validation import validate_full_config
 
 __all__ = [
     # Config

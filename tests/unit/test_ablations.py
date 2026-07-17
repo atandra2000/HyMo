@@ -1,12 +1,14 @@
-"""Tests for the :mod:`hymo.ablations` module (v1.1, deferred)."""
+"""Tests for the :mod:`hymo.ablations` module (v1.1, Phase 4)."""
 
 from __future__ import annotations
+
+from pathlib import Path
 
 import pytest
 
 from hymo.ablations import ABLATION_FAMILIES, AblationSpec, build_ablation_config
 from hymo.core.config import HyMoConfig
-from hymo.core.exceptions import NotImplementedError_
+from hymo.core.exceptions import AblationConfigError
 
 
 class TestAblationFamilies:
@@ -50,12 +52,49 @@ class TestAblationSpec:
             description="y",
             variants=("a", "b"),
         )
-        assert s.tokens == 7_500_000_000  # default
-        assert s.pod_count == 1  # default
+        assert s.tokens == 7_500_000_000
+        assert s.pod_count == 1
 
 
 class TestBuildAblationConfig:
-    def test_raises(self, tmp_path) -> None:
+    def test_build_v1_0_mla_only(self, tmp_path: Path) -> None:
         base = HyMoConfig()
-        with pytest.raises(NotImplementedError_):
-            build_ablation_config("A_moe_on_attention", "v1_0_mla_only", base, tmp_path)
+        cfg = build_ablation_config("A_moe_on_attention", "v1_0_mla_only", base, tmp_path)
+        assert "A_moe_on_attention" in cfg.run.name
+
+    def test_build_every_layer(self, tmp_path: Path) -> None:
+        base = HyMoConfig()
+        cfg = build_ablation_config("A_moe_on_attention", "every_layer", base, tmp_path)
+        assert "every_layer" in cfg.run.name
+
+    def test_build_adamw_only(self, tmp_path: Path) -> None:
+        base = HyMoConfig()
+        cfg = build_ablation_config("B_optimizer_partition", "adamw_only", base, tmp_path)
+        assert "adamw_only" in cfg.run.name
+
+    def test_build_no_mtp(self, tmp_path: Path) -> None:
+        base = HyMoConfig()
+        cfg = build_ablation_config("C_mtp_depth", "no_mtp", base, tmp_path)
+        assert cfg.model.mtp_depth == 0
+        assert cfg.model.mtp_loss_weights == ()
+
+    def test_build_gqa_1_75(self, tmp_path: Path) -> None:
+        base = HyMoConfig()
+        cfg = build_ablation_config("D_mqa4_vs_gqa175", "gqa_1_75", base, tmp_path)
+        assert "gqa_1_75" in cfg.run.name
+        assert cfg.model.n_kv_groups == 8
+
+    def test_unknown_family_raises(self, tmp_path: Path) -> None:
+        base = HyMoConfig()
+        with pytest.raises(AblationConfigError):
+            build_ablation_config("unknown_family", "variant", base, tmp_path)
+
+    def test_unknown_variant_raises(self, tmp_path: Path) -> None:
+        base = HyMoConfig()
+        with pytest.raises(AblationConfigError):
+            build_ablation_config("A_moe_on_attention", "unknown_variant", base, tmp_path)
+
+    def test_scheduler_is_shorter(self, tmp_path: Path) -> None:
+        base = HyMoConfig()
+        cfg = build_ablation_config("C_mtp_depth", "depth_2", base, tmp_path)
+        assert cfg.scheduler.total_steps < base.scheduler.total_steps

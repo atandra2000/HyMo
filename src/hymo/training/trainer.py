@@ -1,45 +1,37 @@
-"""The HyMo training loop (Phase 1 placeholder).
-
-The real implementation (architecture doc §7, roadmap C4, D5, D6, D7,
-E3, G2) ties together:
-
-- :class:`hymo.training.optimizer.build_optimizers` (NorMuon + AdamW).
-- :class:`hymo.training.scheduler.JointWSDScheduler`.
-- :class:`hymo.training.fsdp.wrap_model_with_fsdp` for FSDP-2 wrapping.
-- :class:`hymo.training.checkpoint.save_checkpoint` /
-  :func:`load_checkpoint` for DCP-based save/load.
-- :class:`hymo.training.validation.compute_validation_loss` for
-  real held-out val.
-- :class:`hymo.utils.callbacks.CallbackList` for the event hook.
-
-This placeholder defines the public surface (``Trainer.__init__``,
-``train_step``, ``save``, ``load``, ``train``); the bodies raise
-:class:`NotImplementedError_`.
-"""
+"""The HyMo training loop (Phase 3 implementation)."""
 
 from __future__ import annotations
 
+import logging
+from collections.abc import Iterable
 from dataclasses import dataclass, field
 from pathlib import Path
 
 import torch
-from torch import nn
+from torch.nn import functional as F
 
 from hymo.core.config import HyMoConfig
-from hymo.core.exceptions import NotImplementedError_
-from hymo.utils.callbacks import CallbackList, TrainerState
+from hymo.models import HyMo
+from hymo.training.checkpoint import (
+    CheckpointState,
+    load_checkpoint,
+    save_checkpoint,
+)
+from hymo.training.optimizer import build_optimizers
+from hymo.training.scheduler import JointWSDScheduler
+from hymo.training.validation import (
+    ValMetrics,
+    compute_validation_loss,
+)
 
 __all__ = ["Trainer", "TrainerConfig", "train_step_result"]
+
+log = logging.getLogger(__name__)
 
 
 @dataclass
 class TrainerConfig:
-    """Trainer-only config knobs (subset of :class:`TrainingConfig`).
-
-    These are the knobs the Trainer reads directly at runtime. Most
-    training config lives in :class:`hymo.core.config.TrainingConfig`
-    and is passed in via the :class:`HyMoConfig`.
-    """
+    """Trainer-only configuration settings."""
 
     log_interval: int = 50
     save_interval: int = 4_000
@@ -53,130 +45,285 @@ class TrainerConfig:
 
 @dataclass
 class train_step_result:
-    """The result of a single :meth:`Trainer.train_step` call.
-
-    Attributes
-    ----------
-    loss : float
-        The cross-entropy loss for this step (after MTP contribution).
-    grad_norm : float
-        The L2 norm of the gradients (after clip).
-    lr_muon : float
-        The current NorMuon learning rate.
-    lr_adamw : float
-        The current AdamW learning rate.
-    skipped : bool
-        True if the step was skipped (NaN-skip).
-    metrics : dict
-        Free-form dict for additional metrics.
-    """
+    """The result metrics of a single training step."""
 
     loss: float
     grad_norm: float
     lr_muon: float
     lr_adamw: float
+    is_update: bool = True
     skipped: bool = False
     metrics: dict[str, float] = field(default_factory=dict)
 
 
 class Trainer:
-    """The main HyMo training loop (Phase 1 placeholder).
-
-    Architecture doc §7, §13. Phase 1 placeholder.
-
-    Parameters
-    ----------
-    config : HyMoConfig
-        The top-level config. The Trainer reads every sub-config.
-    model : nn.Module
-        The HyMo model (already constructed and μP-init'd).
-    callbacks : CallbackList or None
-        Optional callback list.
-    """
+    """Trainer manager class for the HyMo pre-training loop."""
 
     def __init__(
         self,
         config: HyMoConfig,
-        model: nn.Module,
-        callbacks: CallbackList | None = None,
+        model: HyMo,
     ) -> None:
         self._config = config
         self.model = model
-        # Explicit None check: CallbackList implements __len__ and an empty
-        # instance is falsy, so ``callbacks or CallbackList()`` would
-        # silently replace a real (empty) CallbackList with a fresh one.
-        self.callbacks = callbacks if callbacks is not None else CallbackList()
-        # Public state — the callbacks read this via the TrainerState.
+
+        import os
+        import torch.distributed as dist
+        _wandb_disabled = os.environ.get("WANDB_MODE", "").lower() in ("disabled", "offline", "dryrun")
+        if not _wandb_disabled and (not dist.is_initialized() or dist.get_rank() == 0):
+            import wandb
+            import dataclasses
+            cfg_dict = dataclasses.asdict(config) if dataclasses.is_dataclass(config) else {}
+            wandb.init(
+                project="HyMo",
+                config=cfg_dict,
+                resume="allow",
+            )
+        self._wandb_enabled = not _wandb_disabled
+
+        self.optimizers = build_optimizers(model, config.optimizer)
+        self.scheduler = JointWSDScheduler(config.scheduler)
+
+        self._base_lr_muon: float | None = (
+            config.optimizer.muon_lr if self.optimizers.nor_muon else None
+        )
+        self._base_lr_adamw: float = config.optimizer.adamw_lr
+
         self.step: int = 0
+        self.micro_step: int = 0
         self.token_count: int = 0
         self.best_loss: float = float("inf")
-        self.state = TrainerState()
+        
+        # Removed whole-model torch.compile() because it is incompatible with FSDP-2
+        # and MoE dynamic shapes. GDN blocks are now compiled individually.
 
-    # ---- Public API -----------------------------------------------------
+        if config.model.mtp_depth > 0:
+            self._has_mtp = True
+        else:
+            self._has_mtp = False
 
     def train_step(
         self,
         tokens: torch.Tensor,
         targets: torch.Tensor,
     ) -> train_step_result:
-        """Run a single optimizer step.
+        """Run a single forward-backward pass, optimizer step, and scheduler step."""
+        self.model.train()
 
-        Phase 1 placeholder — raises :class:`NotImplementedError_`.
-        The real implementation runs the forward, backward, optimizer
-        step, scheduler step, and returns the metrics.
-        """
-        raise NotImplementedError_(
-            "Trainer.train_step is a Phase 1 placeholder; the real "
-            "implementation lands in Phase 3 (design §7, roadmap C4)."
+        if self._has_mtp:
+            mtp_module = getattr(self.model, "_mtp", None)
+            if mtp_module is not None:
+                logits, mtp_outputs = mtp_module.forward(tokens)
+            else:
+                logits = self.model.forward(tokens)
+                mtp_outputs = []
+        else:
+            logits = self.model.forward(tokens)
+            mtp_outputs = []
+
+        V = logits.size(-1)
+
+        main_loss = F.cross_entropy(
+            logits[:, :-1, :].reshape(-1, V),
+            targets[:, :-1].reshape(-1),
+        )
+
+        total_loss = main_loss
+        mtp_details: dict[str, float] = {}
+
+        for i, mtp_out in enumerate(mtp_outputs):
+            mtp_loss = F.cross_entropy(
+                mtp_out.logits.reshape(-1, V),
+                mtp_out.targets.reshape(-1),
+            )
+            weighted = mtp_loss * mtp_out.loss_weight
+            total_loss = total_loss + weighted
+            mtp_details[f"mtp_{i}_loss"] = mtp_loss.item()
+            mtp_details[f"mtp_{i}_weighted"] = weighted.item()
+
+        if self._config.training.loss_nan_skip and (torch.isnan(total_loss) or torch.isinf(total_loss)):
+            self.model.zero_grad(set_to_none=True)
+            return train_step_result(
+                loss=float("nan"),
+                grad_norm=0.0,
+                lr_muon=self._current_lr_muon(),
+                lr_adamw=self._current_lr_adamw(),
+                is_update=False,
+                skipped=True,
+                metrics={"main_loss": float("nan"), **mtp_details},
+            )
+
+        # Scale loss for gradient accumulation
+        scaled_loss = total_loss / self._config.training.gradient_accumulation_steps
+        scaled_loss.backward()
+
+        self.micro_step += 1
+        is_update = (self.micro_step % self._config.training.gradient_accumulation_steps == 0)
+        grad_norm_val = 0.0
+
+        if is_update:
+            grad_norm = torch.nn.utils.clip_grad_norm_(
+                self.model.parameters(),
+                max_norm=self._config.training.grad_clip,
+                norm_type=2.0,
+            )
+            grad_norm_val = grad_norm.item() if isinstance(grad_norm, torch.Tensor) else float(grad_norm)
+
+            factor = self.scheduler.get_factor(self.step + 1)
+            if self.optimizers.nor_muon is not None and self._base_lr_muon is not None:
+                for g in self.optimizers.nor_muon.param_groups:
+                    g["lr"] = self._base_lr_muon * factor
+            for g in self.optimizers.adamw.param_groups:
+                g["lr"] = self._base_lr_adamw * factor
+
+            if self.optimizers.nor_muon is not None:
+                self.optimizers.nor_muon.step()
+            self.optimizers.adamw.step()
+
+            self.scheduler.step()
+            self.model.zero_grad(set_to_none=True)
+
+            self.step += 1
+
+        self.token_count += tokens.numel()
+
+        return train_step_result(
+            loss=total_loss.item(),
+            grad_norm=grad_norm_val,
+            lr_muon=self._current_lr_muon(),
+            lr_adamw=self._current_lr_adamw(),
+            is_update=is_update,
+            skipped=False,
+            metrics={"main_loss": main_loss.item(), **mtp_details},
         )
 
     def save(self, tag: str | None = None) -> Path:
-        """Save a checkpoint.
+        """Save a training checkpoint directory using DCP."""
+        if tag is None:
+            tag = f"step_{self.step}"
+        output_dir = Path(self._config.run.output_dir)
+        # DCP writes a directory, not a single file — use ckpt_dir as the checkpoint ID.
+        ckpt_dir = output_dir / tag
 
-        Phase 1 placeholder — raises :class:`NotImplementedError_`.
-        The real implementation writes to
-        ``{output_dir}/{tag}/`` via DCP (roadmap D3, D7).
-        """
-        raise NotImplementedError_(
-            "Trainer.save is a Phase 1 placeholder; the real "
-            "implementation lands in Phase 3 (design §13.6, roadmap D3)."
-        )
-
-    def load(self, path: str | Path) -> int:
-        """Load a checkpoint and resume.
-
-        Phase 1 placeholder — raises :class:`NotImplementedError_`.
-        Returns the step count to resume from.
-        """
-        raise NotImplementedError_(
-            "Trainer.load is a Phase 1 placeholder; the real "
-            "implementation lands in Phase 3 (design §13.6, roadmap D7)."
-        )
-
-    def train(self, max_steps: int | None = None) -> None:
-        """Run the main training loop.
-
-        Phase 1 placeholder — raises :class:`NotImplementedError_`.
-        """
-        raise NotImplementedError_(
-            "Trainer.train is a Phase 1 placeholder; the real "
-            "implementation lands in Phase 3 (design §7, roadmap C4)."
-        )
-
-    def evaluate(self) -> dict[str, float]:
-        """Run a single validation pass.
-
-        Phase 1 placeholder — raises :class:`NotImplementedError_`.
-        """
-        raise NotImplementedError_(
-            "Trainer.evaluate is a Phase 1 placeholder; the real "
-            "implementation lands in Phase 3 (design §6.3, roadmap E3)."
-        )
-
-    def _make_state(self) -> TrainerState:
-        """Build a fresh :class:`TrainerState` for callback dispatch."""
-        return TrainerState(
+        state = CheckpointState(
             step=self.step,
             token_count=self.token_count,
-            metrics={},
+            best_loss=self.best_loss,
         )
+
+        save_checkpoint(
+            path=ckpt_dir,
+            model=self.model,
+            optimizers=self.optimizers,
+            scheduler=self.scheduler,
+            state=state,
+        )
+
+        log.info("Checkpoint saved to %s (step=%d)", ckpt_dir, self.step)
+        return ckpt_dir
+
+    def load(self, path: str | Path) -> int:
+        """Load a DCP checkpoint directory and restore training state."""
+        p = Path(path)
+        # DCP checkpoint_id is a directory; no sub-file redirect needed.
+
+        state = load_checkpoint(
+            path=p,
+            model=self.model,
+            optimizers=self.optimizers,
+            scheduler=self.scheduler,
+        )
+
+        self.step = state.step
+        self.token_count = state.token_count
+        self.best_loss = state.best_loss
+
+        log.info("Checkpoint loaded from %s (step=%d)", p, self.step)
+        return self.step
+
+    def train(
+        self, data_iter: Iterable[tuple[torch.Tensor, torch.Tensor]], max_steps: int | None = None
+    ) -> None:
+        """Execute the primary training loop iteration."""
+        if max_steps is None:
+            max_steps = self._config.scheduler.total_steps
+
+        for tokens, targets in data_iter:
+            if self.step >= max_steps:
+                break
+
+            result = self.train_step(tokens, targets)
+
+            if result.is_update:
+                if (
+                    self.step % self._config.training.log_interval == 0
+                    and not result.skipped
+                ):
+                    import torch.distributed as dist
+                    if self._wandb_enabled and (not dist.is_initialized() or dist.get_rank() == 0):
+                        import wandb
+                        wandb.log({
+                            "train/loss": result.loss,
+                            "train/grad_norm": result.grad_norm,
+                            "train/lr_muon": result.lr_muon,
+                            "train/lr_adamw": result.lr_adamw,
+                            "train/tokens": self.token_count,
+                            **{f"train/{k}": v for k, v in result.metrics.items()}
+                        }, step=self.step)
+
+                if (
+                    self._config.training.eval_interval > 0
+                    and self.step % self._config.training.eval_interval == 0
+                ):
+                    eval_metrics = self.evaluate()
+                    if eval_metrics.get("val_loss", float("inf")) < self.best_loss:
+                        self.best_loss = eval_metrics["val_loss"]
+                        self.save(tag="best")
+
+                if (
+                    self._config.training.save_interval > 0
+                    and self.step % self._config.training.save_interval == 0
+                ):
+                    self.save()
+
+    def evaluate(self, val_bin_path: str | Path | None = None) -> dict[str, float]:
+        """Compute evaluation metrics over the validation subset."""
+        training_cfg = self._config.training
+        model_cfg = self._config.model
+
+        from hymo.training.validation import DEFAULT_VAL_BIN
+
+        metrics: ValMetrics = compute_validation_loss(
+            self.model,
+            batch_size=training_cfg.micro_batch_size,
+            seq_len=training_cfg.max_seq_len,
+            vocab_size=model_cfg.vocab_size,
+            num_batches=min(4, 32),
+            device=next(self.model.parameters()).device,
+            val_bin_path=Path(val_bin_path) if val_bin_path else DEFAULT_VAL_BIN,
+        )
+
+        import torch.distributed as dist
+        if self._wandb_enabled and (not dist.is_initialized() or dist.get_rank() == 0):
+            import wandb
+            wandb.log({
+                "val/loss": metrics.loss,
+                "val/ppl": metrics.ppl,
+                "val/batches": metrics.num_batches,
+                "val/tokens": metrics.num_tokens,
+            }, step=self.step)
+
+        return {
+            "val_loss": metrics.loss,
+            "val_ppl": metrics.ppl,
+        }
+
+    def _current_lr_muon(self) -> float:
+        if self.optimizers.nor_muon is not None and len(self.optimizers.nor_muon.param_groups) > 0:
+            return float(self.optimizers.nor_muon.param_groups[0].get("lr", 0.0))
+        return 0.0
+
+    def _current_lr_adamw(self) -> float:
+        if len(self.optimizers.adamw.param_groups) > 0:
+            return float(self.optimizers.adamw.param_groups[0].get("lr", 0.0))
+        return 0.0

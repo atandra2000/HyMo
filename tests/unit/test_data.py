@@ -35,6 +35,8 @@ FIXTURES = Path(__file__).parent.parent / "fixtures"
 
 
 class TestSourceSpec:
+    """Verify SourceSpec validation checks."""
+
     def test_construct(self) -> None:
         s = SourceSpec(id="fineweb_edu_q3", weight=0.5)
         assert s.id == "fineweb_edu_q3"
@@ -54,6 +56,8 @@ class TestSourceSpec:
 
 
 class TestDataConfig:
+    """Verify DataConfig source settings and proportions."""
+
     def test_default_construct(self) -> None:
         with pytest.raises(ConfigValidationError):
             DataConfig()
@@ -102,6 +106,8 @@ class TestDataConfig:
 
 
 class TestYamlRoundTrip:
+    """Verify data config YAML round trip load/save behaviors."""
+
     def test_load_default_yaml(self) -> None:
         c = load_data_config(FIXTURES / "tiny_mixture.yaml")
         assert len(c.sources) == 1
@@ -136,6 +142,8 @@ class TestYamlRoundTrip:
 
 
 class TestShardingConfig:
+    """Verify ShardingConfig settings and constraints."""
+
     def test_defaults(self) -> None:
         s = ShardingConfig()
         assert s.shard_size_tokens == 50_000_000
@@ -153,6 +161,8 @@ class TestShardingConfig:
 
 
 class TestTokenizationConfig:
+    """Verify TokenizationConfig settings."""
+
     def test_defaults(self) -> None:
         t = TokenizationConfig()
         assert t.vocab_size == 64_256
@@ -166,6 +176,8 @@ class TestTokenizationConfig:
 
 
 class TestDedupConfig:
+    """Verify DedupConfig parameters and methods."""
+
     def test_defaults(self) -> None:
         d = DedupConfig()
         assert d.enabled is True
@@ -184,6 +196,8 @@ class TestDedupConfig:
 
 
 class TestQualityConfig:
+    """Verify QualityConfig settings."""
+
     def test_defaults(self) -> None:
         q = QualityConfig()
         assert q.drop_empty is True
@@ -191,6 +205,8 @@ class TestQualityConfig:
 
 
 class TestExtendedTokenizer:
+    """Verify ExtendedTokenizer BPE + byte-fallback behaviors."""
+
     def test_construct(self, tmp_path: Path) -> None:
         t = ExtendedTokenizer(tmp_path / "tok.json")
         assert t.path == tmp_path / "tok.json"
@@ -208,6 +224,8 @@ class TestExtendedTokenizer:
 
 
 class TestShardWriter:
+    """Verify ShardWriter token packing and padding outputs."""
+
     def test_construct(self, tmp_path: Path) -> None:
         w = ShardWriter(output_dir=tmp_path, shard_size_tokens=1024)
         assert w.output_dir == tmp_path
@@ -229,10 +247,12 @@ class TestShardWriter:
         assert len(paths) == 3
         assert all(p.exists() for p in paths)
         total = sum(np.fromfile(p, dtype=np.uint32).size for p in paths)
-        assert total == 150  # 120 + 30 pad
+        assert total == 150
 
 
 class TestShardDataset:
+    """Verify ShardDataset slicing input/targets sequence windows."""
+
     def test_empty_dir(self, tmp_path: Path) -> None:
         d = ShardDataset(tmp_path, max_seq_len=64)
         assert len(d) == 0
@@ -245,11 +265,12 @@ class TestShardDataset:
         tokens, targets = d[0]
         assert tokens.shape == (8,)
         assert targets.shape == (8,)
-        # tokens[1:] should equal targets[:-1]
         assert torch.equal(tokens[1:], targets[:-1])
 
 
 class TestDataLoaderBuilder:
+    """Verify DataLoaderBuilder constructs partitioned dataloaders."""
+
     def test_construct(self, tmp_path: Path) -> None:
         w = ShardWriter(output_dir=tmp_path, shard_size_tokens=200)
         w.write_shard(0, np.arange(200, dtype=np.uint32))
@@ -259,11 +280,13 @@ class TestDataLoaderBuilder:
         b = DataLoaderBuilder(d, TrainingConfig(world_size=1))
         loader = b.build()
         batch = next(iter(loader))
-        assert len(batch) == 2  # tokens, targets
+        assert len(batch) == 2
         assert batch[0].shape[0] == TrainingConfig().micro_batch_size
 
 
 class TestDataSourcesRegistered:
+    """Verify standard datamix sources are properly registered."""
+
     def test_10_sources(self) -> None:
         ids = {
             "fineweb_edu_q3",

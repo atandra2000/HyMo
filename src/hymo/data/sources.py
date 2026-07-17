@@ -1,8 +1,7 @@
 """Per-source streaming loaders (Phase 4 implementation).
 
-Architecture doc §6, roadmap A2, A3. Each loader returns a streaming
-generator over HuggingFace dataset rows, applying per-source quality
-filters and field normalization.
+Each loader streams HuggingFace dataset rows, applying per-source quality filters
+and field normalization.
 """
 
 from __future__ import annotations
@@ -32,7 +31,7 @@ __all__ = [
 def load_fineweb_edu(
     *, quality_threshold: int = 3, **kwargs: Any
 ) -> Iterator[dict[str, Any]]:
-    """Stream FineWeb-Edu rows with ``score >= quality_threshold``."""
+    """Stream FineWeb-Edu rows with score >= quality_threshold."""
     ds = load_dataset(
         "HuggingFaceFW/fineweb-edu",
         name="sample-10BT",
@@ -42,7 +41,7 @@ def load_fineweb_edu(
     )
     if quality_threshold > 0:
         ds = ds.filter(lambda row: (row.get("score") or 0) >= quality_threshold)
-    ds = ds.map(lambda r: {"text": r["text"]}, remove_columns=[c for c in ds.column_names if c != "text"])
+    ds = ds.map(lambda r: {"text": r["text"]}, remove_columns=[c for c in (ds.column_names or []) if c != "text"])
     yield from ds
 
 
@@ -56,13 +55,13 @@ def load_fineweb(**kwargs: Any) -> Iterator[dict[str, Any]]:
         streaming=True,
         trust_remote_code=True,
     )
-    ds = ds.map(lambda r: {"text": r["text"]}, remove_columns=[c for c in ds.column_names if c != "text"])
+    ds = ds.map(lambda r: {"text": r["text"]}, remove_columns=[c for c in (ds.column_names or []) if c != "text"])
     yield from ds
 
 
 @DATA_SOURCES.register("stack_python")
 def load_stack_python(**kwargs: Any) -> Iterator[dict[str, Any]]:
-    """Stream Stack v2 Python rows (deduplicated)."""
+    """Stream Stack v2 Python rows."""
     ds = load_dataset(
         "bigcode/the-stack-v2-dedup",
         data_dir="data/python",
@@ -70,13 +69,13 @@ def load_stack_python(**kwargs: Any) -> Iterator[dict[str, Any]]:
         streaming=True,
         trust_remote_code=True,
     )
-    ds = ds.map(lambda r: {"text": r["content"]}, remove_columns=[c for c in ds.column_names if c != "content"])
+    ds = ds.map(lambda r: {"text": r["content"]}, remove_columns=[c for c in (ds.column_names or []) if c != "content"])
     yield from ds
 
 
 @DATA_SOURCES.register("stack_java")
 def load_stack_java(**kwargs: Any) -> Iterator[dict[str, Any]]:
-    """Stream Stack v2 Java rows (deduplicated)."""
+    """Stream Stack v2 Java rows."""
     ds = load_dataset(
         "bigcode/the-stack-v2-dedup",
         data_dir="data/java",
@@ -84,13 +83,13 @@ def load_stack_java(**kwargs: Any) -> Iterator[dict[str, Any]]:
         streaming=True,
         trust_remote_code=True,
     )
-    ds = ds.map(lambda r: {"text": r["content"]}, remove_columns=[c for c in ds.column_names if c != "content"])
+    ds = ds.map(lambda r: {"text": r["content"]}, remove_columns=[c for c in (ds.column_names or []) if c != "content"])
     yield from ds
 
 
 @DATA_SOURCES.register("stack_cpp")
 def load_stack_cpp(**kwargs: Any) -> Iterator[dict[str, Any]]:
-    """Stream Stack v2 C++ rows (deduplicated)."""
+    """Stream Stack v2 C++ rows."""
     ds = load_dataset(
         "bigcode/the-stack-v2-dedup",
         data_dir="data/cpp",
@@ -98,20 +97,20 @@ def load_stack_cpp(**kwargs: Any) -> Iterator[dict[str, Any]]:
         streaming=True,
         trust_remote_code=True,
     )
-    ds = ds.map(lambda r: {"text": r["content"]}, remove_columns=[c for c in ds.column_names if c != "content"])
+    ds = ds.map(lambda r: {"text": r["content"]}, remove_columns=[c for c in (ds.column_names or []) if c != "content"])
     yield from ds
 
 
 @DATA_SOURCES.register("slimpajama")
 def load_slimpajama(**kwargs: Any) -> Iterator[dict[str, Any]]:
-    """Stream SlimPajama (RedPajama-style diversity) rows."""
+    """Stream SlimPajama rows."""
     ds = load_dataset(
         "cerebras/SlimPajama-627B",
         split="train",
         streaming=True,
         trust_remote_code=True,
     )
-    ds = ds.map(lambda r: {"text": r["text"]}, remove_columns=[c for c in ds.column_names if c != "text"])
+    ds = ds.map(lambda r: {"text": r["text"]}, remove_columns=[c for c in (ds.column_names or []) if c != "text"])
     yield from ds
 
 
@@ -124,13 +123,13 @@ def load_dclm_baseline(**kwargs: Any) -> Iterator[dict[str, Any]]:
         streaming=True,
         trust_remote_code=True,
     )
-    ds = ds.map(lambda r: {"text": r["text"]}, remove_columns=[c for c in ds.column_names if c != "text"])
+    ds = ds.map(lambda r: {"text": r["text"]}, remove_columns=[c for c in (ds.column_names or []) if c != "text"])
     yield from ds
 
 
 @DATA_SOURCES.register("dolma_wiki")
 def load_dolma_wiki(**kwargs: Any) -> Iterator[dict[str, Any]]:
-    """Stream Wikipedia (Dolma, multilingual subset) rows."""
+    """Stream Wikipedia (Dolma subset) rows."""
     ds = load_dataset(
         "allenai/dolma",
         data_dir="data/wikipedia",
@@ -138,7 +137,7 @@ def load_dolma_wiki(**kwargs: Any) -> Iterator[dict[str, Any]]:
         streaming=True,
         trust_remote_code=True,
     )
-    ds = ds.map(lambda r: {"text": r["text"]}, remove_columns=[c for c in ds.column_names if c != "text"])
+    ds = ds.map(lambda r: {"text": r["text"]}, remove_columns=[c for c in (ds.column_names or []) if c != "text"])
     yield from ds
 
 
@@ -152,18 +151,18 @@ def load_dolma_books(**kwargs: Any) -> Iterator[dict[str, Any]]:
         streaming=True,
         trust_remote_code=True,
     )
-    ds = ds.map(lambda r: {"text": r["text"]}, remove_columns=[c for c in ds.column_names if c != "text"])
+    ds = ds.map(lambda r: {"text": r["text"]}, remove_columns=[c for c in (ds.column_names or []) if c != "text"])
     yield from ds
 
 
 @DATA_SOURCES.register("cosmopedia")
 def load_cosmopedia(**kwargs: Any) -> Iterator[dict[str, Any]]:
-    """Stream Cosmopedia (HuggingFaceTB) synthetic textbook rows."""
+    """Stream Cosmopedia synthetic textbook rows."""
     ds = load_dataset(
         "HuggingFaceTB/cosmopedia",
         split="train",
         streaming=True,
         trust_remote_code=True,
     )
-    ds = ds.map(lambda r: {"text": r["text"]}, remove_columns=[c for c in ds.column_names if c != "text"])
+    ds = ds.map(lambda r: {"text": r["text"]}, remove_columns=[c for c in (ds.column_names or []) if c != "text"])
     yield from ds

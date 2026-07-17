@@ -1,15 +1,4 @@
-"""The HyMo training loop (Phase 3 implementation).
-
-Ties together:
-
-- :class:`hymo.training.optimizer.build_optimizers` (NorMuon + AdamW).
-- :class:`hymo.training.scheduler.JointWSDScheduler`.
-- :class:`hymo.training.checkpoint.save_checkpoint` /
-  :func:`load_checkpoint`.
-- :class:`hymo.training.validation.compute_validation_loss` for
-  real held-out val.
-- :class:`hymo.utils.callbacks.CallbackList` for the event hook.
-"""
+"""The HyMo training loop (Phase 3 implementation)."""
 
 from __future__ import annotations
 
@@ -42,7 +31,7 @@ log = logging.getLogger(__name__)
 
 @dataclass
 class TrainerConfig:
-    """Trainer-only config knobs (subset of :class:`TrainingConfig`)."""
+    """Trainer-only configuration settings."""
 
     log_interval: int = 50
     save_interval: int = 4_000
@@ -56,23 +45,7 @@ class TrainerConfig:
 
 @dataclass
 class train_step_result:
-    """The result of a single :meth:`Trainer.train_step` call.
-
-    Attributes
-    ----------
-    loss : float
-        The cross-entropy loss for this step (after MTP contributions).
-    grad_norm : float
-        The L2 norm of the gradients (after clip).
-    lr_muon : float
-        The current NorMuon learning rate.
-    lr_adamw : float
-        The current AdamW learning rate.
-    skipped : bool
-        True if the step was skipped (NaN-skip).
-    metrics : dict
-        Free-form dict for additional metrics (e.g. MTP losses).
-    """
+    """The result metrics of a single training step."""
 
     loss: float
     grad_norm: float
@@ -83,17 +56,7 @@ class train_step_result:
 
 
 class Trainer:
-    """The main HyMo training loop.
-
-    Parameters
-    ----------
-    config : HyMoConfig
-        The top-level config.
-    model : HyMo
-        The HyMo model (already constructed and μP-init'd).
-    callbacks : CallbackList or None
-        Optional callback list.
-    """
+    """Trainer manager class for the HyMo pre-training loop."""
 
     def __init__(
         self,
@@ -106,13 +69,11 @@ class Trainer:
         self.optimizers = build_optimizers(model, config.optimizer)
         self.scheduler = JointWSDScheduler(config.scheduler)
 
-        # Store base LRs so the scheduler factor is applied multiplicatively.
         self._base_lr_muon: float | None = (
             config.optimizer.muon_lr if self.optimizers.nor_muon else None
         )
         self._base_lr_adamw: float = config.optimizer.adamw_lr
 
-        # Public state.
         self.step: int = 0
         self.token_count: int = 0
         self.best_loss: float = float("inf")
@@ -122,38 +83,18 @@ class Trainer:
         else:
             self._has_mtp = False
 
-    # ---- Public API -----------------------------------------------------
-
     def train_step(
         self,
         tokens: torch.Tensor,
         targets: torch.Tensor,
     ) -> train_step_result:
-        """Run a single optimizer step.
-
-        Performs a forward pass, computes the cross-entropy loss
-        (including MTP if applicable), backpropagates, clips gradients,
-        applies the optimizers, and advances the scheduler.
-
-        Parameters
-        ----------
-        tokens : torch.Tensor
-            Input token ids of shape ``(B, T)``.
-        targets : torch.Tensor
-            Target token ids of shape ``(B, T)``.
-
-        Returns
-        -------
-        train_step_result
-        """
+        """Run a single forward-backward pass, optimizer step, and scheduler step."""
         self.model.train()
 
-        # ---- forward + loss ----
         if self._has_mtp:
             mtp_module = getattr(self.model, "_mtp", None)
             if mtp_module is not None:
                 logits, mtp_outputs = mtp_module.forward(tokens)
-                # logits are raw (pre-softcap) from forward_with_hidden
             else:
                 logits = self.model.forward(tokens)
                 mtp_outputs = []
@@ -181,7 +122,6 @@ class Trainer:
             mtp_details[f"mtp_{i}_loss"] = mtp_loss.item()
             mtp_details[f"mtp_{i}_weighted"] = weighted.item()
 
-        # ---- NaN-skip check ----
         if self._config.training.loss_nan_skip and (torch.isnan(total_loss) or torch.isinf(total_loss)):
             self.model.zero_grad(set_to_none=True)
             return train_step_result(
@@ -193,10 +133,8 @@ class Trainer:
                 metrics={"main_loss": float("nan"), **mtp_details},
             )
 
-        # ---- backward ----
         total_loss.backward()  # type: ignore[no-untyped-call]
 
-        # ---- gradient clipping ----
         grad_norm = torch.nn.utils.clip_grad_norm_(
             self.model.parameters(),
             max_norm=self._config.training.grad_clip,
@@ -204,7 +142,6 @@ class Trainer:
         )
         grad_norm_val = grad_norm.item() if isinstance(grad_norm, torch.Tensor) else float(grad_norm)
 
-        # ---- scheduler factor → effective LR ----
         factor = self.scheduler.get_factor(self.step + 1)
         if self.optimizers.nor_muon is not None and self._base_lr_muon is not None:
             for g in self.optimizers.nor_muon.param_groups:
@@ -212,12 +149,10 @@ class Trainer:
         for g in self.optimizers.adamw.param_groups:
             g["lr"] = self._base_lr_adamw * factor
 
-        # ---- optimizer step ----
         if self.optimizers.nor_muon is not None:
             self.optimizers.nor_muon.step()
         self.optimizers.adamw.step()
 
-        # ---- post-step cleanup ----
         self.scheduler.step()
         self.model.zero_grad(set_to_none=True)
 
@@ -234,19 +169,7 @@ class Trainer:
         )
 
     def save(self, tag: str | None = None) -> Path:
-        """Save a checkpoint to ``{output_dir}/{tag}/model.pt``.
-
-        Parameters
-        ----------
-        tag : str or None
-            Checkpoint tag (e.g. ``"step_1000"`` or ``"best"``).
-            Defaults to ``f"step_{self.step}"``.
-
-        Returns
-        -------
-        Path
-            The path to the saved checkpoint.
-        """
+        """Save a training checkpoint file to output directory."""
         if tag is None:
             tag = f"step_{self.step}"
         output_dir = Path(self._config.run.output_dir)
@@ -271,19 +194,7 @@ class Trainer:
         return ckpt_path
 
     def load(self, path: str | Path) -> int:
-        """Load a checkpoint and resume.
-
-        Parameters
-        ----------
-        path : str or Path
-            Path to the checkpoint file (``.pt``) or directory
-            containing ``model.pt``.
-
-        Returns
-        -------
-        int
-            The step count to resume from.
-        """
+        """Load a checkpoint file to resume training state."""
         p = Path(path)
         if p.is_dir():
             p = p / "model.pt"
@@ -305,17 +216,7 @@ class Trainer:
     def train(
         self, data_iter: Iterable[tuple[torch.Tensor, torch.Tensor]], max_steps: int | None = None
     ) -> None:
-        """Run the main training loop.
-
-        Parameters
-        ----------
-        data_iter : iterable of (tokens, targets)
-            An iterable yielding ``(tokens, targets)`` tensors of shape
-            ``(B, T)`` each. Typically a :class:`torch.utils.data.DataLoader`.
-        max_steps : int or None
-            Maximum number of optimizer steps. Defaults to the config's
-            ``scheduler.total_steps``.
-        """
+        """Execute the primary training loop iteration."""
         if max_steps is None:
             max_steps = self._config.scheduler.total_steps
 
@@ -335,7 +236,6 @@ class Trainer:
                     result.lr_muon, result.lr_adamw,
                 )
 
-            # Validation.
             if (
                 self._config.training.eval_interval > 0
                 and self.step % self._config.training.eval_interval == 0
@@ -345,7 +245,6 @@ class Trainer:
                     self.best_loss = eval_metrics["val_loss"]
                     self.save(tag="best")
 
-            # Checkpoint save.
             if (
                 self._config.training.save_interval > 0
                 and self.step % self._config.training.save_interval == 0
@@ -353,19 +252,7 @@ class Trainer:
                 self.save()
 
     def evaluate(self, val_bin_path: str | Path | None = None) -> dict[str, float]:
-        """Run a single validation pass on the held-out ``val.bin``.
-
-        Parameters
-        ----------
-        val_bin_path : str or Path or None
-            Path to the validation binary. Defaults to
-            ``data/tokens/val.bin``.
-
-        Returns
-        -------
-        dict[str, float]
-            With keys ``val_loss`` and ``val_ppl``.
-        """
+        """Compute evaluation metrics over the validation subset."""
         training_cfg = self._config.training
         model_cfg = self._config.model
 
@@ -376,7 +263,7 @@ class Trainer:
             batch_size=training_cfg.micro_batch_size,
             seq_len=training_cfg.max_seq_len,
             vocab_size=model_cfg.vocab_size,
-            num_batches=min(4, 32),  # quick partial eval by default
+            num_batches=min(4, 32),
             device=next(self.model.parameters()).device,
             val_bin_path=Path(val_bin_path) if val_bin_path else DEFAULT_VAL_BIN,
         )
@@ -392,8 +279,6 @@ class Trainer:
             "val_ppl": metrics.ppl,
         }
 
-    # ---- Internal helpers ------------------------------------------------
-
     def _current_lr_muon(self) -> float:
         if self.optimizers.nor_muon is not None and len(self.optimizers.nor_muon.param_groups) > 0:
             return float(self.optimizers.nor_muon.param_groups[0].get("lr", 0.0))
@@ -403,4 +288,3 @@ class Trainer:
         if len(self.optimizers.adamw.param_groups) > 0:
             return float(self.optimizers.adamw.param_groups[0].get("lr", 0.0))
         return 0.0
-

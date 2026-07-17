@@ -1,16 +1,16 @@
-# HyMo v1.0 data mixture (architecture doc §6, roadmap A1).
-# 10 sources; weights sum to 1.0; target total = 30B tokens.
+# HyMo v1.0 data mixture configuration.
+# Target total = 30B tokens.
 sources:
-  - { id: fineweb_edu_q3, weight: 0.50 }   # FineWeb-Edu with quality score >= 3
+  - { id: fineweb_edu_q3, weight: 0.50 }
   - { id: fineweb,         weight: 0.14 }
   - { id: stack_python,    weight: 0.10 }
   - { id: stack_java,      weight: 0.03 }
   - { id: stack_cpp,       weight: 0.02 }
   - { id: slimpajama,      weight: 0.08 }
-  - { id: dclm_baseline,   weight: 0.05 }   # NEW in v1.0
-  - { id: dolma_wiki,      weight: 0.04 }   # multilingual Wikipedia
+  - { id: dclm_baseline,   weight: 0.05 }
+  - { id: dolma_wiki,      weight: 0.04 }
   - { id: dolma_books,     weight: 0.03 }
-  - { id: cosmopedia,      weight: 0.01 }   # NEW in v1.0 (synthetic textbook-style)
+  - { id: cosmopedia,      weight: 0.01 }
 
 train_fraction: 0.97
 val_fraction: 0.015
@@ -19,7 +19,7 @@ test_fraction: 0.015
 sharding:
   shard_size_tokens: 50000000
   dtype: uint32
-  target_total_tokens: 30000000000   # 30B
+  target_total_tokens: 30000000000
   cross_document_boundary_ok: false
   verify_after_pack: true
   output_dir: data/shards

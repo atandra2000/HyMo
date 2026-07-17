@@ -1,12 +1,4 @@
-"""Joint WSD scheduler (Phase 3 implementation).
-
-The multiplicative factor on both optimizers' learning rates. The factor
-is 0 at step 0, ramps linearly to 1.0 over the warmup phase, stays
-at 1.0 over the stable phase, and decays (linear/cosine/sqrt) to
-``min_lr_ratio`` over the decay phase.
-
-Preserves ``lr_muon / lr_adamw = 66.7`` by returning a single factor.
-"""
+"""Joint WSD scheduler (Phase 3 implementation)."""
 
 from __future__ import annotations
 
@@ -17,16 +9,11 @@ from hymo.core.config import SchedulerConfig
 
 __all__ = ["JointWSDScheduler", "DecaySchedule"]
 
-
 DecaySchedule = Literal["linear", "cosine", "sqrt"]
 
 
 class JointWSDScheduler:
-    """Joint WSD scheduler (warmup-stable-decay).
-
-    Architecture doc §5.3. Returns a multiplicative factor applied
-    to both optimizers' base LRs externally.
-    """
+    """Joint WSD scheduler (warmup-stable-decay)."""
 
     def __init__(self, config: SchedulerConfig) -> None:
         self._config = config
@@ -42,12 +29,7 @@ class JointWSDScheduler:
         return self._config
 
     def get_factor(self, step: int) -> float:
-        """Return the multiplicative factor for the given step.
-
-        - step < warmup_steps: linear ramp 0 → 1
-        - warmup ≤ step < warmup + stable: 1.0
-        - decay phase: decay 1 → min_lr_ratio
-        """
+        """Return the learning rate multiplicative scaling factor for the given step."""
         if step < self.warmup_steps:
             return step / max(self.warmup_steps, 1)
 
@@ -62,7 +44,7 @@ class JointWSDScheduler:
         return self.min_lr_ratio + (1.0 - self.min_lr_ratio) * decay_val
 
     def step(self) -> None:
-        """Advance the internal step counter (call after each optimizer step)."""
+        """Advance internal scheduler step counter."""
         self._step += 1
 
     def state_dict(self) -> dict[str, int]:
@@ -73,12 +55,7 @@ class JointWSDScheduler:
 
     @staticmethod
     def _decay_factor(progress: float, kind: DecaySchedule) -> float:
-        """Pure function: given progress in [0, 1], return decay factor in
-        ``[0, 1]``.
-
-        Exposed as a public static method so tests can verify the
-        decay shape without instantiating the full scheduler.
-        """
+        """Pure static helper to calculate decay scaling factor from progress in [0, 1]."""
         if not 0.0 <= progress <= 1.0:
             raise ValueError(f"progress must be in [0, 1], got {progress}")
         if kind == "linear":

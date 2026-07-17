@@ -1,13 +1,7 @@
 """Shard writer, dataset, and dataloader builder (Phase 4 implementation).
 
-Architecture doc §6.2, roadmap A6.
-
-- :class:`ShardWriter` writes 50M-token ``uint32`` shards.
-- :class:`ShardDataset` reads shards as a :class:`torch.utils.data.Dataset`,
-  yielding ``(tokens, targets)`` windows of ``max_seq_len`` tokens.
-- :class:`DataLoaderBuilder` is a thin wrapper around
-  :class:`torch.utils.data.DataLoader` with prefetch + multi-worker
-  settings.
+Contains utilities to serialize token streams to 50M-token shards, load shards
+as PyTorch Datasets, and build training DataLoaders.
 """
 
 from __future__ import annotations
@@ -28,10 +22,7 @@ _DEFAULT_SHARD_DIR = Path("data/shards")
 
 
 class ShardWriter:
-    """Write 50M-token ``uint32`` shards.
-
-    Architecture doc §6.2.
-    """
+    """Writes uint32 flat binary token shards to disk."""
 
     def __init__(
         self,
@@ -43,7 +34,7 @@ class ShardWriter:
         self.shard_size_tokens = shard_size_tokens
 
     def write_shard(self, shard_idx: int, tokens: npt.NDArray[np.uint32]) -> Path:
-        """Write one shard to ``{output_dir}/shard_{shard_idx:05d}.bin``."""
+        """Write a single token chunk to a file named shard_{shard_idx:05d}.bin."""
         path = self.output_dir / f"shard_{shard_idx:05d}.bin"
         tokens.astype(np.uint32).tofile(path)
         return path
@@ -51,10 +42,7 @@ class ShardWriter:
     def write_batched(
         self, token_stream: npt.NDArray[np.uint32]
     ) -> list[Path]:
-        """Write a flat token array into shards of ``shard_size_tokens``.
-
-        Returns the list of written shard paths.
-        """
+        """Write flat token stream split into multiple shard_size_tokens shards."""
         paths: list[Path] = []
         shard_idx = 0
         offset = 0
@@ -71,22 +59,11 @@ class ShardWriter:
 
 
 def _discover_shards(shards_dir: Path) -> list[Path]:
-    """Return sorted list of shard_*.bin paths."""
     return sorted(shards_dir.glob("shard_*.bin"))
 
 
 class ShardDataset(Dataset[tuple[torch.Tensor, torch.Tensor]]):
-    """Read shards and yield ``(tokens, targets)`` windows.
-
-    Architecture doc §6.2 / §7.1.
-
-    Parameters
-    ----------
-    shards_dir : str or Path
-        Directory containing ``shard_*.bin`` files.
-    max_seq_len : int
-        Window size.
-    """
+    """Loads shards and yields training (tokens, targets) sliding window examples."""
 
     def __init__(
         self,
@@ -101,17 +78,12 @@ class ShardDataset(Dataset[tuple[torch.Tensor, torch.Tensor]]):
         self._load_all()
 
     def _load_all(self) -> None:
-        """Load all shards into memory and compute total examples."""
         for sp in self._shard_paths:
             data = np.fromfile(sp, dtype=np.uint32)
             self._shard_data.append(data)
             self._total_tokens += len(data)
 
     def _locate(self, idx: int) -> tuple[int, int]:
-        """Return (shard_index, token_offset) for the idx-th example.
-
-        Each example consumes ``max_seq_len + 1`` tokens (inputs + targets).
-        """
         target = idx * (self.max_seq_len + 1)
         for si, data in enumerate(self._shard_data):
             if target < len(data):
@@ -130,7 +102,6 @@ class ShardDataset(Dataset[tuple[torch.Tensor, torch.Tensor]]):
         chunk = data[offset : offset + self.max_seq_len + 1]
         if len(chunk) < self.max_seq_len + 1:
             remainder = (self.max_seq_len + 1) - len(chunk)
-            # Cycle to the next shard for filler tokens.
             next_si = (si + 1) % len(self._shard_data)
             chunk = np.concatenate(
                 [chunk, self._shard_data[next_si][:remainder]]
@@ -141,11 +112,7 @@ class ShardDataset(Dataset[tuple[torch.Tensor, torch.Tensor]]):
 
 
 class DataLoaderBuilder:
-    """Build a :class:`torch.utils.data.DataLoader` for training.
-
-    Architecture doc §13.7: 4 workers per rank, prefetch overlapped
-    with compute.
-    """
+    """Helper to build a torch.utils.data.DataLoader with multi-process workers."""
 
     def __init__(
         self,
@@ -156,7 +123,6 @@ class DataLoaderBuilder:
         self.config = config
 
     def build(self) -> DataLoader[Any]:
-        """Build a :class:`torch.utils.data.DataLoader`."""
         effective_batch = self.config.micro_batch_size
         sampler = torch.utils.data.RandomSampler(
             self.dataset,

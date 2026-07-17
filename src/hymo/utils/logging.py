@@ -1,17 +1,4 @@
-"""Logging utilities.
-
-Two surfaces:
-
-- :func:`get_logger` — a project-wide logger configured once, with
-  optional W&B integration.
-- :class:`MetricsLogger` — append-only JSON-lines writer for structured
-  metrics. One line per training step; every metric is a key in the
-  JSON object.
-
-The :class:`MetricsLogger` is the canonical format for HyMo training
-metrics. The trainer writes one line per step; downstream tooling
-(notebooks, eval scripts) reads the JSONL line-by-line.
-"""
+"""Logging utilities for project logging and structured JSONL metrics logging."""
 
 from __future__ import annotations
 
@@ -30,18 +17,7 @@ _DATE_FORMAT = "%Y-%m-%dT%H:%M:%S"
 
 
 def get_logger(name: str | None = None) -> logging.Logger:
-    """Return a project logger.
-
-    The root ``hymo`` logger is configured once with a stderr handler
-    and the standard format. Subsequent calls return child loggers.
-
-    Parameters
-    ----------
-    name : str or None
-        If None, returns the root ``hymo`` logger. If a dotted suffix
-        is given, returns a child logger (e.g. ``"trainer"`` →
-        ``hymo.trainer``).
-    """
+    """Return or initialize a project Logger instance."""
     root = logging.getLogger(_LOGGER_NAME)
     if not root.handlers:
         handler = logging.StreamHandler(sys.stderr)
@@ -53,20 +29,9 @@ def get_logger(name: str | None = None) -> logging.Logger:
     return root.getChild(name)
 
 
-# ----------------------------------------------------------------------
-# Structured metrics logger (JSON-lines)
-# ----------------------------------------------------------------------
-
-
 @dataclass
 class MetricsRecord:
-    """A single step's worth of metrics.
-
-    ``step`` is the global optimizer step. ``timestamp`` is set on
-    construction. ``metrics`` is the free-form dict of scalar values.
-    Extra fields can be added at construction; this dataclass is
-    intentionally permissive.
-    """
+    """A single training step's structured metrics log record."""
 
     step: int
     metrics: dict[str, Any] = field(default_factory=dict)
@@ -74,21 +39,7 @@ class MetricsRecord:
 
 
 class MetricsLogger:
-    """Append-only JSON-lines metrics writer.
-
-    Usage
-    -----
-    .. code-block:: python
-
-        logger = MetricsLogger(Path("logs/metrics.jsonl"))
-        logger.log(step=0, loss=11.06, lr=0.0)
-        logger.log(step=1, loss=10.92, lr=1e-5)
-        logger.close()
-
-        # Or as a context manager:
-        with MetricsLogger(Path("logs/metrics.jsonl")) as logger:
-            logger.log(step=0, loss=11.06)
-    """
+    """Append-only JSON-lines structured metrics writer."""
 
     def __init__(self, path: str | Path, *, flush_every: int = 10) -> None:
         self.path = Path(path)
@@ -99,7 +50,7 @@ class MetricsLogger:
         self._log = get_logger("metrics")
 
     def log(self, step: int, **metrics: Any) -> None:
-        """Write one JSON line for the given step + metric kwargs."""
+        """Write a metrics record JSON line for the given step."""
         rec = MetricsRecord(step=step, metrics=metrics)
         line = json.dumps(asdict(rec), default=_json_default)
         self._fp.write(line + "\n")
@@ -109,7 +60,7 @@ class MetricsLogger:
             self._n_since_flush = 0
 
     def iter_records(self) -> Iterator[MetricsRecord]:
-        """Yield every record from the file (re-reads from the start)."""
+        """Yield every MetricsRecord from the file (re-reads from start)."""
         if not self.path.exists():
             return
         with self.path.open("r", encoding="utf-8") as f:
@@ -125,13 +76,14 @@ class MetricsLogger:
                 )
 
     def last_step(self) -> int | None:
-        """Return the step of the last record, or None if empty."""
+        """Return the step number of the last logged record, if any."""
         last: int | None = None
         for rec in self.iter_records():
             last = rec.step
         return last
 
     def close(self) -> None:
+        """Flush and close the open metrics file handle."""
         if not self._fp.closed:
             self._fp.flush()
             self._fp.close()
@@ -144,9 +96,8 @@ class MetricsLogger:
 
 
 def _json_default(obj: Any) -> Any:
-    """JSON encoder default for non-trivial types."""
+    """JSON encoder fallback for NumPy and PyTorch scalar/array types."""
     if hasattr(obj, "item"):
-        # NumPy / torch scalars
         return obj.item()
     if hasattr(obj, "tolist"):
         return obj.tolist()

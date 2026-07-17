@@ -1,8 +1,4 @@
-"""Markdown comparison table (architecture doc §15).
-
-Produces a markdown table from a single HyMo result dict, with the
-3 baseline columns.
-"""
+"""Markdown comparison table generation (architecture doc §15)."""
 
 from __future__ import annotations
 
@@ -10,8 +6,7 @@ from hymo.eval.baselines import BASELINE_DISPLAY_NAMES, BASELINES
 
 __all__ = ["format_comparison_table", "METRIC_ORDER"]
 
-
-# The fixed metric order for the comparison table.
+# Fixed metric order for the comparison table
 METRIC_ORDER: tuple[str, ...] = (
     "fineweb_edu_ppl",
     "hellaswag",
@@ -27,20 +22,7 @@ def format_comparison_table(
     *,
     baselines: tuple[str, ...] = ("pythia-1b", "mobile_moe_0.9b", "smollm2_1.7b"),
 ) -> str:
-    """Format a markdown comparison table from HyMo + baseline numbers.
-
-    Parameters
-    ----------
-    hymo_results : dict[str, float]
-        The 6 HyMo metrics, keyed by metric name.
-    baselines : tuple[str, ...]
-        Which baselines to include (default: all three).
-
-    Returns
-    -------
-    str
-        A markdown table.
-    """
+    """Format a markdown comparison table from HyMo results and baseline metrics."""
     cols = ["Metric", "HyMo", *[BASELINE_DISPLAY_NAMES.get(b, b) for b in baselines]]
     lines = [
         "| " + " | ".join(cols) + " |",

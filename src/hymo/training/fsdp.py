@@ -1,17 +1,4 @@
-"""FSDP-2 wrapper (Phase 1 placeholder).
-
-The real implementation (architecture doc §13, roadmap D1, D2):
-
-- Wraps the model with :class:`torch.distributed.fsdp.FullyShardedDataParallel`
-  using a per-expert MoE wrapping policy (16 separate FSDP instances
-  per MoE layer).
-- Mixed-precision policy: ``bfloat16`` for params / reduce / buffer.
-- Per-expert NorMuon sharding with sort-by-size + round-robin
-  (architecture doc §13.3).
-
-The :func:`wrap_model_with_fsdp` function signature is stable; the
-body raises :class:`NotImplementedError_` in Phase 1.
-"""
+"""FSDP-2 wrapper placeholders for Phase 1/Phase 3."""
 
 from __future__ import annotations
 
@@ -32,17 +19,7 @@ __all__ = [
 
 
 def fsdp_auto_wrap_policy(module: nn.Module, recurse: bool, non_blocking: bool) -> bool:
-    """The FSDP auto-wrap policy for HyMo.
-
-    Returns True iff ``module`` should be wrapped as its own FSDP
-    instance. The rules (architecture doc §13.2):
-
-    - Per-layer: every GDN block and every MLA block is wrapped.
-    - Per-expert: every :class:`hymo.models.moe.SwiGLUExpert` is
-      wrapped (16 experts × 8 MLA layers = 128 FSDP instances).
-    - Replicated (NOT wrapped): the MoE gate, RMSNorm γ, softcap
-      (which isn't a parameter).
-    """
+    """FSDP auto-wrap policy function (Phase 1 placeholder)."""
     raise NotImplementedError_(
         "fsdp_auto_wrap_policy is a Phase 1 placeholder; the real "
         "implementation lands in Phase 3 (design §13.2, roadmap D1)."
@@ -50,16 +27,7 @@ def fsdp_auto_wrap_policy(module: nn.Module, recurse: bool, non_blocking: bool) 
 
 
 class RankedParamShard:
-    """The result of :func:`shard_nor_muon_params`.
-
-    Attributes
-    ----------
-    rank_assignments : list[list[nn.Parameter]]
-        Per-rank lists of parameters. ``rank_assignments[r]`` is the
-        list of parameters assigned to rank ``r``.
-    rank_byte_counts : list[int]
-        Per-rank total bytes. Used for the 5% balance check.
-    """
+    """The parameter partitioning shard assignments across ranks."""
 
     __slots__ = ("rank_assignments", "rank_byte_counts")
 
@@ -86,12 +54,7 @@ def shard_nor_muon_params(
     model: nn.Module,
     world_size: int,
 ) -> RankedParamShard:
-    """Sort-by-size + round-robin assignment of NorMuon params to ranks.
-
-    Architecture doc §13.3. Phase 1 placeholder.
-
-    The 5% balance invariant: ``max(rank_byte_counts) / avg < 1.05``.
-    """
+    """NorMuon parameter shard optimizer balancer (Phase 1 placeholder)."""
     raise NotImplementedError_(
         "shard_nor_muon_params is a Phase 1 placeholder; the real "
         "implementation lands in Phase 3 (design §13.3, roadmap D2)."
@@ -106,11 +69,7 @@ def wrap_model_with_fsdp(
     auto_wrap_policy: Callable[..., bool] | None = None,
     **kwargs: Any,
 ) -> nn.Module:
-    """Wrap the model with FSDP-2.
-
-    Phase 1 placeholder — the real implementation lands in Phase 3
-    (design §13.1, roadmap D1).
-    """
+    """Wrap model module inside FullyShardedDataParallel wrapper (Phase 1 placeholder)."""
     raise NotImplementedError_(
         "wrap_model_with_fsdp is a Phase 1 placeholder; the real "
         "implementation lands in Phase 3 (design §13.1, roadmap D1)."

@@ -1,4 +1,4 @@
-"""Tests for the training partition and the placeholder optimizers."""
+"""Tests for the training partition, optimizers, and Joint WSD scheduler."""
 
 from __future__ import annotations
 
@@ -20,12 +20,10 @@ from hymo.training import (
     partition_parameters,
 )
 
-# ----------------------------------------------------------------------
-# Partition predicate
-# ----------------------------------------------------------------------
-
 
 class TestGoesToAdamw:
+    """Verify goes_to_adamw partition routes variables to AdamW optimizer."""
+
     def test_embed_to_adamw(self) -> None:
         p = torch.empty(64_256, 896)
         assert goes_to_adamw("embed.weight", nn.Parameter(p)) is True
@@ -51,7 +49,6 @@ class TestGoesToAdamw:
         assert goes_to_adamw("layers.0.moe.gate.weight", nn.Parameter(p)) is True
 
     def test_moe_expert_weight_to_adamw(self) -> None:
-        """Claim 2: MoE expert weights go to AdamW, not NorMuon."""
         p = torch.empty(896, 2304)
         assert goes_to_adamw("layers.0.moe.experts.0.w1.weight", nn.Parameter(p)) is True
         assert goes_to_adamw("layers.0.moe.experts.0.w2.weight", nn.Parameter(p)) is True
@@ -82,52 +79,42 @@ class TestGoesToAdamw:
 
 
 class TestGoesToNorMuon:
+    """Verify goes_to_nor_muon partition routes variables to NorMuon optimizer."""
+
     def test_attn_to_nor_muon(self) -> None:
         p = torch.empty(896, 224)
         assert goes_to_nor_muon("layers.0.attn.attn.wq_a.weight", nn.Parameter(p)) is True
 
     def test_moe_expert_not_to_nor_muon(self) -> None:
-        """Claim 2: MoE expert weights are excluded from NorMuon."""
         p = torch.empty(896, 2304)
         assert goes_to_nor_muon("layers.0.moe.experts.0.w1.weight", nn.Parameter(p)) is False
 
     def test_1d_to_nor_muon_returns_false(self) -> None:
-        """1D params are not NorMuon — they are AdamW."""
         p = torch.empty(896)
         assert goes_to_nor_muon("layers.0.norm.weight", nn.Parameter(p)) is False
 
 
 class TestPartitionParameters:
-    def test_partition_against_tiny_model(self, tiny_hymo_model) -> None:
-        """The partition routes the right parameters on the tiny HyMo
-        (M1-friendly). The rule is size-independent: every param
-        lands in exactly one of {AdamW, NorMuon}."""
-        partition = partition_parameters(tiny_hymo_model)
+    """Verify model parameters group partition allocations."""
 
-        # Every parameter must be in exactly one group.
+    def test_partition_against_tiny_model(self, tiny_hymo_model: HyMo) -> None:
+        partition = partition_parameters(tiny_hymo_model)
         total = len(partition.adamw) + len(partition.nor_muon)
         all_params = sum(1 for _ in tiny_hymo_model.parameters())
-        # Some params are tied (head ↔ embed) so we may see one fewer.
         assert total <= all_params
         assert total >= all_params - 1
 
     @pytest.mark.heavy
     def test_partition_against_full_model(self) -> None:
-        """v1.0 production partition sanity check. Gated by ``heavy``."""
         config = load_config("configs/hymo_750m.yaml")
         model = HyMo(config.model)
         partition = partition_parameters(model)
-
         total = len(partition.adamw) + len(partition.nor_muon)
         all_params = sum(1 for _ in model.parameters())
         assert total <= all_params
         assert total >= all_params - 1
 
-    def test_partition_count_moe_experts_tiny(self, tiny_hymo_model) -> None:
-        """Tiny: n MLA × n_routed_experts × 3 = routed expert weights on
-        AdamW; n MLA × n_shared_experts × 3 = shared expert weights on
-        AdamW. Counts are derived from the tiny config so the test stays
-        valid as the tiny expert count changes."""
+    def test_partition_count_moe_experts_tiny(self, tiny_hymo_model: HyMo) -> None:
         m = tiny_hymo_model.config
         n_mla = sum(
             1 for layer in tiny_hymo_model.layers if hasattr(layer, "moe")
@@ -157,8 +144,6 @@ class TestPartitionParameters:
 
     @pytest.mark.heavy
     def test_partition_count_moe_experts_full(self) -> None:
-        """v1.0 production: 8 MLA × 16 routed × 3 = 384 expert
-        weights; 8 MLA × 1 shared × 3 = 24. Gated by ``heavy``."""
         config = load_config("configs/hymo_750m.yaml")
         model = HyMo(config.model)
         partition = partition_parameters(model)
@@ -184,20 +169,17 @@ class TestPartitionParameters:
                 n_shared += 1
         assert n_shared == 24
 
-    def test_partition_count_gdn_a_log_tiny(self, tiny_hymo_model) -> None:
-        """Tiny: 3 GDN × 1 A_log = 3 scalars on AdamW."""
+    def test_partition_count_gdn_a_log_tiny(self, tiny_hymo_model: HyMo) -> None:
         partition = partition_parameters(tiny_hymo_model)
         adamw_ids = {id(p) for p in partition.adamw}
         n_a_log = 0
         for name, p in tiny_hymo_model.named_parameters():
             if name.endswith(".A_log") and id(p) in adamw_ids:
                 n_a_log += 1
-        assert n_a_log == 3  # tiny: 3 GDN layers
+        assert n_a_log == 3
 
     @pytest.mark.heavy
     def test_partition_count_gdn_a_log_full(self) -> None:
-        """v1.0 production: 24 GDN × 1 A_log = 24 scalars on AdamW.
-        Gated by ``heavy``."""
         config = load_config("configs/hymo_750m.yaml")
         model = HyMo(config.model)
         partition = partition_parameters(model)
@@ -214,12 +196,9 @@ class TestPartitionParameters:
         assert len(p) == 0
 
 
-# ----------------------------------------------------------------------
-# Optimizers
-# ----------------------------------------------------------------------
-
-
 class TestNorMuon:
+    """Verify NorMuon optimizer parameters updates and master weights."""
+
     def test_construct(self) -> None:
         p = torch.nn.Parameter(torch.randn(10, 10))
         opt = NorMuon([p], lr=0.02)
@@ -243,10 +222,8 @@ class TestNorMuon:
         orig = p.data.clone()
         opt = NorMuon([p])
         opt.step()
-        # Parameters should have changed (and not be NaN).
         assert not torch.equal(p.data, orig)
         assert torch.isfinite(p.data).all()
-        # Step does not zero grads; that's the caller's job.
         assert p.grad is not None
 
     def test_step_preserves_fp32_master(self) -> None:
@@ -260,6 +237,8 @@ class TestNorMuon:
 
 
 class TestCautiousAdamW:
+    """Verify CautiousAdamW optimizer parameters updates and master weights."""
+
     def test_construct(self) -> None:
         p = torch.nn.Parameter(torch.randn(10, 10))
         opt = CautiousAdamW([p], lr=3e-4)
@@ -291,12 +270,9 @@ class TestCautiousAdamW:
         assert state["master_weight"].dtype == torch.float32
 
 
-# ----------------------------------------------------------------------
-# Optimizers container
-# ----------------------------------------------------------------------
-
-
 class TestOptimizers:
+    """Verify dual optimizers container serialization round trips."""
+
     def test_state_dict_and_load(self) -> None:
         p1 = torch.nn.Parameter(torch.randn(10, 10))
         p2 = torch.nn.Parameter(torch.randn(5, 5))
@@ -306,26 +282,22 @@ class TestOptimizers:
         sd = opts.state_dict()
         assert "nor_muon" in sd
         assert "adamw" in sd
-        # Round-trip.
         opts2 = Optimizers(NorMuon([p1]), CautiousAdamW([p2]))
         opts2.load_state_dict(sd)
 
 
 class TestBuildOptimizers:
-    def test_build_from_tiny_model(self, tiny_hymo_config) -> None:
-        """Build optimizers on the tiny model (M1-friendly)."""
+    """Verify build_optimizers constructs dual optimizer pairs."""
+
+    def test_build_from_tiny_model(self, tiny_hymo_config: HyMoConfig) -> None:
         model = HyMo(tiny_hymo_config.model)
         opts = build_optimizers(model, tiny_hymo_config.optimizer)
         assert isinstance(opts, Optimizers)
         assert isinstance(opts.adamw, CautiousAdamW)
-        # NorMuon may be None if all params went to AdamW; in practice
-        # the HyMo model has plenty of 2D weights for NorMuon.
         assert opts.nor_muon is not None
         assert isinstance(opts.nor_muon, NorMuon)
 
-    def test_lr_ratio_preserved(self, tiny_hymo_config) -> None:
-        """The 66.7× lr ratio is a config property and is preserved
-        when building optimizers (verified on tiny)."""
+    def test_lr_ratio_preserved(self, tiny_hymo_config: HyMoConfig) -> None:
         model = HyMo(tiny_hymo_config.model)
         opts = build_optimizers(model, tiny_hymo_config.optimizer)
         nm_lr = opts.nor_muon.defaults["lr"]
@@ -334,8 +306,6 @@ class TestBuildOptimizers:
 
     @pytest.mark.heavy
     def test_build_from_full_model(self) -> None:
-        """v1.0 production: build optimizers on the full HyMo.
-        Gated by ``heavy``."""
         config = load_config("configs/hymo_750m.yaml")
         model = HyMo(config.model)
         opts = build_optimizers(model, config.optimizer)
@@ -345,12 +315,9 @@ class TestBuildOptimizers:
         assert isinstance(opts.nor_muon, NorMuon)
 
 
-# ----------------------------------------------------------------------
-# Scheduler
-# ----------------------------------------------------------------------
-
-
 class TestJointWSDScheduler:
+    """Verify Joint WSD scheduler factor transitions across steps."""
+
     def test_construct(self) -> None:
         from hymo.core.config import SchedulerConfig
 
@@ -366,7 +333,7 @@ class TestJointWSDScheduler:
         from hymo.core.config import SchedulerConfig
 
         s = JointWSDScheduler(SchedulerConfig())
-        assert s.get_factor(0) == 0.0  # step 0 → factor 0
+        assert s.get_factor(0) == 0.0
         warmup = s.warmup_steps
         mid_warmup = warmup // 2
         f_mid = s.get_factor(mid_warmup)
@@ -389,7 +356,7 @@ class TestJointWSDScheduler:
         s = JointWSDScheduler(SchedulerConfig())
         decay_start = s.warmup_steps + s.stable_steps
         total = decay_start + s.decay_steps
-        factor_end = s.get_factor(total + 100)  # past end
+        factor_end = s.get_factor(total + 100)
         assert factor_end == pytest.approx(s.min_lr_ratio, abs=1e-6)
         mid_decay = decay_start + s.decay_steps // 2
         f_mid = s.get_factor(mid_decay)
@@ -399,7 +366,6 @@ class TestJointWSDScheduler:
         from hymo.core.config import SchedulerConfig
 
         s = JointWSDScheduler(SchedulerConfig())
-        # progress=0 → 1.0; progress=1 → 0.0.
         assert s._decay_factor(0.0, "linear") == 1.0
         assert s._decay_factor(1.0, "linear") == 0.0
         assert s._decay_factor(0.5, "linear") == 0.5
@@ -408,7 +374,6 @@ class TestJointWSDScheduler:
         from hymo.core.config import SchedulerConfig
 
         s = JointWSDScheduler(SchedulerConfig())
-        # progress=0 → 1.0; progress=1 → 0.0; progress=0.5 → 0.5.
         assert s._decay_factor(0.0, "cosine") == 1.0
         assert s._decay_factor(1.0, "cosine") == pytest.approx(0.0, abs=1e-9)
         assert s._decay_factor(0.5, "cosine") == pytest.approx(0.5, abs=1e-9)
@@ -417,7 +382,6 @@ class TestJointWSDScheduler:
         from hymo.core.config import SchedulerConfig
 
         s = JointWSDScheduler(SchedulerConfig())
-        # progress=0 → 1.0; progress=1 → 0.0.
         assert s._decay_factor(0.0, "sqrt") == 1.0
         assert s._decay_factor(1.0, "sqrt") == pytest.approx(0.0, abs=1e-9)
 
@@ -447,7 +411,6 @@ class TestJointWSDScheduler:
         s.step()
         sd2 = s.state_dict()
         assert sd2["step"] == 1
-        # Round-trip.
         s2 = JointWSDScheduler(SchedulerConfig())
         s2.load_state_dict(sd2)
         assert s2.state_dict()["step"] == 1

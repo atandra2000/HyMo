@@ -1,13 +1,4 @@
-"""Dual optimizer: NorMuon + AdamW (Phase 3 implementation).
-
-- :class:`NorMuon` — the NorMuon optimizer (arXiv 2510.05491) for
-  2D dense weights. Newton-Schulz orthogonalization + row-wise RMS
-  normalization. Cautious weight decay (Lion-style mask).
-- :class:`CautiousAdamW` — AdamW with the same cautious mask; FP32
-  master weights; β2 = 0.95 (the 2026 norm for small LLM training).
-
-Both are subclasses of :class:`torch.optim.Optimizer`.
-"""
+"""Dual optimizer: NorMuon + AdamW (Phase 3 implementation)."""
 
 from __future__ import annotations
 
@@ -23,20 +14,12 @@ from hymo.core.config import OptimizerConfig
 
 __all__ = ["NorMuon", "CautiousAdamW", "build_optimizers", "Optimizers"]
 
-# ---------------------------------------------------------------------------
-# Newton-Schulz helper (pure torch, no extra deps)
-# ---------------------------------------------------------------------------
-
 
 @torch.no_grad()
 def _newton_schulz_orthogonalize(
     g: torch.Tensor, iterations: int = 5
 ) -> torch.Tensor:
-    """Newton-Schulz iterative orthogonalization.
-
-    Approximates the matrix sign function of ``g @ g.T``.
-    Normalises first so the iterates stay bounded.
-    """
+    """Newton-Schulz iterative orthogonalization to approximate matrix sign function."""
     norm = g.norm()
     if norm < 1e-12:
         return g
@@ -46,22 +29,8 @@ def _newton_schulz_orthogonalize(
     return g * norm  # type: ignore[no-any-return]
 
 
-# ---------------------------------------------------------------------------
-# NorMuon
-# ---------------------------------------------------------------------------
-
-
 class NorMuon(Optimizer):
-    """NorMuon optimizer with FP32 master weights.
-
-    Architecture doc §5.2. Implemented per arXiv 2510.05491:
-    - Newton-Schulz orthogonalization of momentum buffer.
-    - Row-wise RMS normalisation of the update.
-    - Cautious weight decay (Lion-style mask).
-
-    Defaults: lr=0.02, momentum=0.95, betas=(0.95, 0.95), eps=1e-8,
-    weight_decay=0.1, cautious_wd=True.
-    """
+    """NorMuon optimizer with FP32 master weights (architecture doc §5.2)."""
 
     def __init__(
         self,
@@ -139,21 +108,8 @@ class NorMuon(Optimizer):
         return loss
 
 
-# ---------------------------------------------------------------------------
-# CautiousAdamW
-# ---------------------------------------------------------------------------
-
-
 class CautiousAdamW(Optimizer):
-    """AdamW with cautious weight decay and FP32 master weights.
-
-    Architecture doc §5.2. Standard AdamW with β1=0.9, β2=0.95 and
-    a Lion-style cautious decay mask. FP32 master weights prevent
-    precision drift in mixed-precision training.
-
-    Defaults: lr=3e-4, betas=(0.9, 0.95), eps=1e-8, weight_decay=0.0
-    (most params; embed/head use 0.1), cautious_wd=False.
-    """
+    """AdamW with cautious weight decay and FP32 master weights (architecture doc §5.2)."""
 
     def __init__(
         self,
@@ -229,21 +185,8 @@ class CautiousAdamW(Optimizer):
         return loss
 
 
-# ----------------------------------------------------------------------
-# Builder
-# ----------------------------------------------------------------------
-
-
 class Optimizers:
-    """Container for the two optimizers + the WSD scheduler.
-
-    Attributes
-    ----------
-    nor_muon : NorMuon or None
-        The NorMuon optimizer, or None if no 2D dense params.
-    adamw : CautiousAdamW
-        The AdamW optimizer.
-    """
+    """Container for the dual optimizers."""
 
     __slots__ = ("nor_muon", "adamw")
 
@@ -267,11 +210,7 @@ def build_optimizers(
     model: nn.Module,
     config: OptimizerConfig,
 ) -> Optimizers:
-    """Build the dual optimizer pair from a partitioned model.
-
-    Phase 1 placeholder — partitions correctly but the optimizer
-    classes themselves are placeholders.
-    """
+    """Build the dual optimizer pair from a partitioned model."""
     from hymo.training.partition import partition_parameters
 
     partition = partition_parameters(model)

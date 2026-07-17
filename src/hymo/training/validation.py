@@ -1,8 +1,4 @@
-"""Real held-out validation (Phase 3 implementation).
-
-Reads batches from ``data/tokens/val.bin``, runs the model in eval
-mode, and returns the cross-entropy loss and perplexity.
-"""
+"""Real held-out validation loss and perplexity evaluation."""
 
 from __future__ import annotations
 
@@ -23,19 +19,7 @@ __all__ = ["get_val_batch", "compute_validation_loss", "ValMetrics"]
 
 @dataclass
 class ValMetrics:
-    """The result of a validation pass.
-
-    Attributes
-    ----------
-    loss : float
-        Mean cross-entropy loss (per token).
-    ppl : float
-        ``exp(loss)`` perplexity.
-    num_batches : int
-        Number of batches evaluated.
-    num_tokens : int
-        Number of tokens evaluated.
-    """
+    """The result metrics computed over validation evaluation data."""
 
     loss: float
     ppl: float
@@ -43,18 +27,14 @@ class ValMetrics:
     num_tokens: int
 
 
-# Path to the held-out validation binary (architecture doc §6.3).
-# This is the canonical location; the data pipeline (Phase 4) writes
-# the file here.
 DEFAULT_VAL_BIN = Path("data/tokens/val.bin")
 
-# Module-level cache: the val.bin is ~1.8 GB, so we mmap it once.
 _val_cache: npt.NDArray[np.uint32] | None = None
 _val_cache_path: Path | None = None
 
 
 def _load_val_tokens(path: Path = DEFAULT_VAL_BIN) -> npt.NDArray[np.uint32]:
-    """Load (or return cached) validation tokens from ``path``."""
+    """Memory-map or load validation tokens from path."""
     global _val_cache, _val_cache_path
     if _val_cache is None or _val_cache_path != path:
         if not path.exists():
@@ -74,12 +54,7 @@ def get_val_batch(
     seed: int = 42,
     path: Path = DEFAULT_VAL_BIN,
 ) -> tuple[torch.Tensor, torch.Tensor]:
-    """Slice a deterministic (tokens, targets) window from ``val.bin``.
-
-    Deterministic across runs: uses ``seed`` to compute a fixed offset
-    into the token array, then slices ``B * (T + 1)`` tokens to produce
-    the ``(B, T)`` input and ``(B, T)`` target (shifted by 1).
-    """
+    """Slice a deterministic validation batch from val.bin."""
     tokens_np = _load_val_tokens(path)
     total_tokens = batch_size * (seq_len + 1)
 
@@ -105,12 +80,7 @@ def compute_validation_loss(
     seed: int = 42,
     val_bin_path: Path = DEFAULT_VAL_BIN,
 ) -> ValMetrics:
-    """Run ``num_batches`` validation batches and return the metrics.
-
-    Iterates ``num_batches`` deterministic windows from ``val.bin``,
-    runs the model in ``eval()`` mode, computes CE loss, and returns
-    aggregated :class:`ValMetrics`.
-    """
+    """Compute average validation cross-entropy loss and perplexity."""
     was_training = model.training
     model.eval()
 

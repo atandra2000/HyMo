@@ -1,10 +1,4 @@
-"""Checkpoint save/load (Phase 3 implementation).
-
-Uses ``torch.save`` / ``torch.load`` for single-GPU. The same API
-signature supports DCP (``torch.distributed.checkpoint``) in the
-distributed Phase 4 — callers supply the same arguments regardless
-of backend.
-"""
+"""Checkpoint save/load utilities using PyTorch serialize APIs."""
 
 from __future__ import annotations
 
@@ -29,22 +23,7 @@ __all__ = [
 
 @dataclass
 class CheckpointState:
-    """The state carried by every checkpoint.
-
-    Attributes
-    ----------
-    step : int
-        Global optimizer step.
-    token_count : int
-        Trained tokens (resumed for metrics continuity).
-    best_loss : float
-        Best validation loss seen so far.
-    rng_state : dict
-        Per-rank RNG state (CPU + CUDA).
-    metrics_extra : dict
-        Free-form dict for forward-compat (e.g. EMA bias stats, expert
-        load entropy).
-    """
+    """Carried metadata state for checkpoints."""
 
     step: int = 0
     token_count: int = 0
@@ -54,7 +33,7 @@ class CheckpointState:
 
 
 def _capture_rng_state() -> dict[str, Any]:
-    """Capture the current Python + NumPy + PyTorch RNG states."""
+    """Capture current Python, NumPy, and PyTorch RNG states."""
     return {
         "python": random.getstate(),
         "numpy": np.random.get_state(),
@@ -64,7 +43,7 @@ def _capture_rng_state() -> dict[str, Any]:
 
 
 def _restore_rng_state(rng_state: dict[str, Any]) -> None:
-    """Restore previously captured RNG states."""
+    """Restore previously captured Python, NumPy, and PyTorch RNG states."""
     if "python" in rng_state:
         random.setstate(rng_state["python"])
     if "numpy" in rng_state:
@@ -77,7 +56,7 @@ def _restore_rng_state(rng_state: dict[str, Any]) -> None:
 
 
 def _optimizer_state_dict(optimizers: Optimizers) -> dict[str, Any]:
-    """Extract serializable optimizer state + param group configs."""
+    """Extract states of the dual optimizers."""
     nm_sd = optimizers.nor_muon.state_dict() if optimizers.nor_muon else None
     aw_sd = optimizers.adamw.state_dict()
     return {
@@ -92,7 +71,7 @@ def _optimizer_load_state_dict(
     optimizers: Optimizers,
     state: dict[str, Any],
 ) -> None:
-    """Restore optimizer state from a previously saved dict."""
+    """Load states back into the dual optimizers."""
     if optimizers.nor_muon and state.get("nor_muon") is not None:
         optimizers.nor_muon.load_state_dict(state["nor_muon"])
     if state.get("adamw") is not None:
@@ -106,12 +85,7 @@ def save_checkpoint(
     scheduler: JointWSDScheduler,
     state: CheckpointState,
 ) -> None:
-    """Save a checkpoint to ``path``.
-
-    For single-GPU: writes a single ``.pt`` file containing model
-    weights, optimizer states, scheduler state, and metadata.
-    Directory is created if missing.
-    """
+    """Save model weights, optimizer states, scheduler state, and metadata to path."""
     path = Path(path)
     path.parent.mkdir(parents=True, exist_ok=True)
 
@@ -126,7 +100,7 @@ def save_checkpoint(
         "best_loss": state.best_loss,
         "rng_state": rng_state,
         "metrics_extra": state.metrics_extra or {},
-        "config_json": None,  # caller adds config via CheckpointState.metrics_extra
+        "config_json": None,
     }
 
     tmp_path = path.with_suffix(".tmp")
@@ -140,23 +114,16 @@ def load_checkpoint(
     optimizers: Optimizers,
     scheduler: JointWSDScheduler,
 ) -> CheckpointState:
-    """Load a checkpoint from ``path``.
-
-    Returns a :class:`CheckpointState` with the metadata from the
-    checkpoint. The caller should set the model / optimizers /
-    scheduler into eval or train mode as appropriate after loading.
-    """
+    """Load checkpoint file and restore states of model, optimizers, and scheduler."""
     path = Path(path)
     if not path.exists():
         from hymo.core.exceptions import CheckpointNotFoundError
-
         raise CheckpointNotFoundError(f"Checkpoint not found: {path}")
 
     try:
         checkpoint = torch.load(path, map_location="cpu", weights_only=False)
     except Exception as e:
         from hymo.core.exceptions import CheckpointCorruptError
-
         raise CheckpointCorruptError(f"Failed to load checkpoint {path}: {e}") from e
 
     model.load_state_dict(checkpoint["model_state_dict"])

@@ -1,8 +1,4 @@
-"""lm-evaluation-harness wrapper (Phase 4 implementation).
-
-Architecture doc §15, roadmap E1. Thin wrapper around ``lm_eval``
-using ``lm_eval.models.huggingface.HFLM`` to wrap a HyMo model.
-"""
+"""lm-evaluation-harness wrapper (Phase 4 implementation)."""
 
 from __future__ import annotations
 
@@ -14,19 +10,7 @@ __all__ = ["run_harness_eval", "EvalResult"]
 
 
 class EvalResult:
-    """The result of a single eval run.
-
-    Attributes
-    ----------
-    task : str
-        Task name (e.g. ``"hellaswag"``).
-    metric : str
-        The metric key from lm-eval (e.g. ``"acc_norm,none"``).
-    value : float
-        The metric value.
-    stderr : float or None
-        The stderr (if reported by lm-eval).
-    """
+    """The result of a single task eval run."""
 
     __slots__ = ("task", "metric", "value", "stderr")
 
@@ -57,26 +41,7 @@ def run_harness_eval(
     num_fewshot: int = 0,
     batch_size: int = 4,
 ) -> dict[str, EvalResult]:
-    """Run lm-evaluation-harness on the given tasks.
-
-    Parameters
-    ----------
-    model : nn.Module
-        The HyMo model instance.
-    tokenizer : ExtendedTokenizer
-        The tokenizer (used for encoding/decoding).
-    tasks : list of str
-        Task names understood by lm-eval (e.g. ``["hellaswag"]``).
-    num_fewshot : int
-        Number of few-shot examples (default 0).
-    batch_size : int
-        Batch size for evaluation.
-
-    Returns
-    -------
-    dict[str, EvalResult]
-        Mapping from task name to :class:`EvalResult`.
-    """
+    """Run lm-evaluation-harness on the given tasks for a HyMo model."""
     import lm_eval
     from lm_eval.models.huggingface import HFLM
 

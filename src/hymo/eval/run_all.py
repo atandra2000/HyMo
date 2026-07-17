@@ -1,9 +1,4 @@
-"""The 6-eval suite runner (Phase 4 implementation).
-
-Architecture doc §15, roadmap E2. Entry point that runs the 6 evals
-(FineWeb-Edu PPL, HellaSwag, ARC, MMLU, GSM8K, HumanEval) and writes
-``eval_results.json``.
-"""
+"""The 6-eval suite runner (Phase 4 implementation)."""
 
 from __future__ import annotations
 
@@ -18,9 +13,7 @@ from hymo.training.validation import compute_validation_loss
 
 __all__ = ["EVAL_SUITE", "run_all", "EvalSuiteResult"]
 
-
-# The 6-eval suite (architecture doc §15).
-# (task_name, num_fewshot)
+# The 6-eval suite (task_name, num_fewshot)
 EVAL_SUITE: tuple[tuple[str, int], ...] = (
     ("hellaswag", 0),
     ("arc_challenge", 0),
@@ -58,30 +51,7 @@ def run_all(
     seq_len: int = 4_096,
     vocab_size: int = 64_256,
 ) -> EvalSuiteResult:
-    """Run the 6-eval suite and write JSON.
-
-    Parameters
-    ----------
-    model : nn.Module
-        The HyMo model instance.
-    tokenizer : ExtendedTokenizer
-        Tokenizer for lm-eval tasks.
-    output_path : str or Path
-        Where to write the results JSON.
-    batch_size : int
-        Batch size for eval.
-    val_bin_path : str or Path
-        Path to the held-out validation binary.
-    seq_len : int
-        Sequence length for perplexity eval.
-    vocab_size : int
-        Vocabulary size for perplexity calculation.
-
-    Returns
-    -------
-    EvalSuiteResult
-        The aggregated results.
-    """
+    """Run the 6-eval suite and write results to JSON."""
     device = next(model.parameters()).device
     lm_eval_tasks: list[str] = []
     for task, _n_shot in EVAL_SUITE:

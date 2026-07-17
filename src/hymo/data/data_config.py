@@ -1,17 +1,7 @@
 """Data-pipeline config (separate from the model config).
 
-The data pipeline is a distinct concern from the model config: the
-data prep can be parallelized (one pod streaming + tokenizing) while
-the model + training work happens on another. The two configs are
-loaded independently.
-
-The :class:`DataConfig` is the v1.0 spec (architecture doc §6,
-roadmap A1, A5):
-
-- 10 sources per the v1.0 quality-first mixture.
-- 30B total training tokens.
-- 50M-token shards, ``uint32``, ~120 GB total.
-- BPE-64k + 256 byte-level fallback vocab (64,256 total).
+The data pipeline configuration handles data sources, sharding,
+tokenization, deduplication, and quality filtering parameters.
 """
 
 from __future__ import annotations
@@ -44,16 +34,7 @@ __all__ = [
 
 @dataclass(frozen=True)
 class SourceSpec:
-    """A single data source (corpus) in the mixture.
-
-    Attributes
-    ----------
-    id : str
-        Source identifier (e.g. ``"fineweb_edu_q3"``).
-    weight : float
-        Sampling weight; the sum of weights across all sources must
-        equal 1.0.
-    """
+    """A single data source (corpus) in the mixture with its weight."""
 
     id: str
     weight: float
@@ -92,7 +73,7 @@ class ShardingConfig:
 
 @dataclass(frozen=True)
 class TokenizationConfig:
-    """Tokenizer configuration."""
+    """Tokenizer configuration parameters."""
 
     name: str = "hymo-bpe-64k"
     path: str = "data/tokens/byte_bpe_vocab.json"
@@ -111,7 +92,7 @@ class TokenizationConfig:
 
 @dataclass(frozen=True)
 class DedupConfig:
-    """Deduplication parameters."""
+    """Deduplication and Bloom filter parameters."""
 
     enabled: bool = True
     method: str = "sha256"
@@ -152,7 +133,7 @@ class QualityConfig:
 
 @dataclass(frozen=True)
 class DataConfig:
-    """Top-level data-pipeline config."""
+    """Top-level data-pipeline configuration mixture."""
 
     sources: tuple[SourceSpec, ...] = field(default_factory=tuple)
     sharding: ShardingConfig = field(default_factory=ShardingConfig)
@@ -178,8 +159,6 @@ class DataConfig:
                 "train + val + test fractions must equal 1.0"
             )
 
-    # ---- Convenience ---------------------------------------------------
-
     def source_ids(self) -> tuple[str, ...]:
         return tuple(s.id for s in self.sources)
 
@@ -188,11 +167,6 @@ class DataConfig:
             if s.id == source_id:
                 return s
         raise KeyError(f"Source {source_id!r} not in mixture")
-
-
-# ----------------------------------------------------------------------
-# Load / save
-# ----------------------------------------------------------------------
 
 
 def _to_dict(obj: Any) -> Any:
@@ -209,7 +183,7 @@ def _to_dict(obj: Any) -> Any:
 
 
 def _build_data_config(raw: dict[str, Any]) -> DataConfig:
-    """Build a :class:`DataConfig` from a raw dict."""
+    """Build a DataConfig from a raw dict."""
     sources_raw = raw.get("sources", [])
     if not sources_raw:
         raise ConfigValidationError("At least one source is required")
@@ -235,7 +209,7 @@ def _build_data_config(raw: dict[str, Any]) -> DataConfig:
 
 
 def load_data_config(path: str | PathType) -> DataConfig:
-    """Load a :class:`DataConfig` from a YAML file."""
+    """Load a DataConfig from a YAML file."""
     path = Path(path)
     if not path.exists():
         raise ConfigNotFoundError(f"Data config file not found: {path}")
@@ -252,12 +226,12 @@ def load_data_config(path: str | PathType) -> DataConfig:
 
 
 def load_data_config_from_dict(raw: dict[str, Any]) -> DataConfig:
-    """Build a :class:`DataConfig` from a plain dict."""
+    """Build a DataConfig from a plain dict."""
     return _build_data_config(raw)
 
 
 def save_data_config(config: DataConfig, path: str | PathType) -> None:
-    """Dump a :class:`DataConfig` to YAML atomically."""
+    """Dump a DataConfig to YAML atomically."""
 
     def writer(tmp: Path) -> None:
         with tmp.open("w", encoding="utf-8") as f:

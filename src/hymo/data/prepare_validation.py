@@ -1,7 +1,6 @@
-"""Build the real held-out validation set (architecture doc §6.3, roadmap A7).
+"""Build the real held-out validation set (architecture doc §6.3).
 
-Produces ``data/tokens/val.bin`` from a 5% held-out split of FineWeb-Edu
-(0.45B tokens, ~1.8 GB). Run after the tokenizer is trained.
+Produces a flat binary shard from a held-out split of FineWeb-Edu.
 """
 
 from __future__ import annotations
@@ -14,11 +13,21 @@ import numpy as np
 
 from hymo.data.tokenizer import ExtendedTokenizer
 
-try:
+if typing.TYPE_CHECKING:
     from tqdm import tqdm
-except ImportError:
-    def tqdm(iterable: typing.Any, **kwargs: typing.Any) -> typing.Any:
-        return iterable
+else:
+    try:
+        from tqdm import tqdm
+    except ImportError:
+        class tqdm:
+            def __init__(self, *args: typing.Any, **kwargs: typing.Any) -> None:
+                pass
+
+            def update(self, n: int = 1) -> None:
+                pass
+
+            def close(self) -> None:
+                pass
 
 
 def build_val_set(
@@ -27,11 +36,7 @@ def build_val_set(
     tokenizer_path: str | Path = "data/tokens/byte_bpe_vocab.json",
     output_path: str | Path = "data/tokens/val.bin",
 ) -> None:
-    """Build the held-out validation set from FineWeb-Edu.
-
-    Skips the first 5% shard of FineWeb-Edu (which is held out from the
-    training pipeline) and tokenizes it into a flat ``uint32`` binary.
-    """
+    """Build the held-out validation set by tokenizing FineWeb-Edu to a flat binary file."""
     from datasets import load_dataset
 
     tok = ExtendedTokenizer(tokenizer_path)
@@ -45,7 +50,7 @@ def build_val_set(
         trust_remote_code=True,
     )
     ds = ds.shard(num_shards=20, index=0)
-    ds = ds.map(lambda r: {"text": r["text"]}, remove_columns=[c for c in ds.column_names if c != "text"])
+    ds = ds.map(lambda r: {"text": r["text"]}, remove_columns=[c for c in (ds.features or {}) if c != "text"])
 
     tokens: list[int] = []
     pbar = tqdm(total=target_tokens, desc="Tokenizing val set")

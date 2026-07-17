@@ -1,19 +1,6 @@
 """Ablation framework (v1.1, deferred — Phase 4 implementation).
 
-Architecture doc §16. The 4 ablations are NOT part of v1.0; they run
-on separate pods after the v1.0 primary is complete. This module
-provides the framework + config derivation so the v1.1 ablations can
-be launched without code changes.
-
-Each ablation is a 7.5B-token (25% of primary) run on a separate
-4x A100 80GB SXM pod.
-
-Ablation families (architecture doc §16):
-
-A. MoE-on-attention-only (claim 1) — 2 variants.
-B. NorMuon-with-MoE-exclusion (claim 2) — 3 variants.
-C. MTP depth ablation (claim 3) — 3 variants.
-D. MQA-4 vs GQA-1.75 (claim 6) — 2 variants.
+Provides the framework and config derivation for running v1.1 ablations.
 """
 
 from __future__ import annotations
@@ -38,22 +25,7 @@ __all__ = [
 
 @dataclass(frozen=True)
 class AblationSpec:
-    """A single ablation's spec.
-
-    Attributes
-    ----------
-    name : str
-        E.g. ``"A_moe_on_attention"``.
-    description : str
-        One-line description.
-    variants : tuple[str, ...]
-        Names of the variants (each is a config derived from the v1.0
-        primary).
-    tokens : int
-        Tokens per variant (default 7.5B = 25% of primary).
-    pod_count : int
-        Number of pods (1 per variant if running in parallel).
-    """
+    """A single ablation's specification metadata."""
 
     name: str
     description: str
@@ -62,7 +34,6 @@ class AblationSpec:
     pod_count: int = 1
 
 
-# The 4 ablation families (architecture doc §16).
 ABLATION_FAMILIES: dict[str, AblationSpec] = {
     "A_moe_on_attention": AblationSpec(
         name="A_moe_on_attention",
@@ -72,10 +43,7 @@ ABLATION_FAMILIES: dict[str, AblationSpec] = {
     ),
     "B_optimizer_partition": AblationSpec(
         name="B_optimizer_partition",
-        description=(
-            "NorMuon-with-MoE-exclusion (v1.0) vs AdamW-only vs "
-            "NorMuon-everything."
-        ),
+        description="NorMuon-with-MoE-exclusion (v1.0) vs AdamW-only vs NorMuon-everything.",
         variants=("nor_muon_excl_moe", "adamw_only", "nor_muon_all"),
         pod_count=3,
     ),
@@ -97,7 +65,7 @@ ABLATION_FAMILIES: dict[str, AblationSpec] = {
 def _build_ablation_config_A(
     variant: str, base: HyMoConfig, output_dir: Path
 ) -> HyMoConfig:
-    """MoE-on-attention-only ablation."""
+    """MoE-on-attention-only ablation configuration."""
     if variant == "v1_0_mla_only":
         return dc_replace(
             base,
@@ -108,9 +76,6 @@ def _build_ablation_config_A(
             base,
             model=dc_replace(
                 base.model,
-                # Override the GDN-block FFN from DenseFFN to MoE.
-                # This is approximated by swapping inter_dim to match
-                # moe_inter_dim so the GDN blocks get MoE-like capacity.
                 inter_dim=base.model.moe_inter_dim,
                 n_activated_experts=base.model.n_activated_experts,
             ),
@@ -124,7 +89,7 @@ def _build_ablation_config_A(
 def _build_ablation_config_B(
     variant: str, base: HyMoConfig, output_dir: Path
 ) -> HyMoConfig:
-    """NorMuon-with-MoE-exclusion ablation."""
+    """NorMuon-with-MoE-exclusion ablation configuration."""
     if variant == "nor_muon_excl_moe":
         return dc_replace(
             base,
@@ -153,7 +118,7 @@ def _build_ablation_config_B(
 def _build_ablation_config_C(
     variant: str, base: HyMoConfig, output_dir: Path
 ) -> HyMoConfig:
-    """MTP depth ablation."""
+    """MTP depth ablation configuration."""
     if variant == "no_mtp":
         return dc_replace(
             base,
@@ -187,7 +152,7 @@ def _build_ablation_config_C(
 def _build_ablation_config_D(
     variant: str, base: HyMoConfig, output_dir: Path
 ) -> HyMoConfig:
-    """MQA-4 vs GQA-1.75 ablation."""
+    """MQA-4 vs GQA-1.75 ablation configuration."""
     if variant == "mqa4":
         return dc_replace(
             base,
@@ -198,7 +163,7 @@ def _build_ablation_config_D(
             base,
             model=dc_replace(
                 base.model,
-                n_kv_groups=8,       # 16/8 = 2 shared → GQA-2
+                n_kv_groups=8,
                 qk_nope_head_dim=96,
                 qk_rope_head_dim=32,
                 head_dim=128,
@@ -224,30 +189,7 @@ def build_ablation_config(
     base: HyMoConfig,
     output_dir: str | Path,
 ) -> HyMoConfig:
-    """Derive an ablation config from the v1.0 base.
-
-    Parameters
-    ----------
-    family : str
-        One of ``"A_moe_on_attention"``, ``"B_optimizer_partition"``,
-        ``"C_mtp_depth"``, ``"D_mqa4_vs_gqa175"``.
-    variant : str
-        One of the variants defined in :data:`ABLATION_FAMILIES`.
-    base : HyMoConfig
-        The v1.0 primary config.
-    output_dir : str or Path
-        Output directory for this ablation run.
-
-    Returns
-    -------
-    HyMoConfig
-        The derived ablation configuration.
-
-    Raises
-    ------
-    AblationConfigError
-        If the family/variant pair is unknown.
-    """
+    """Derive an ablation configuration from the v1.0 base configuration."""
     output = Path(output_dir)
     builder = _BUILDERS.get(family)
     if builder is None:
@@ -256,7 +198,6 @@ def build_ablation_config(
             f"Valid: {list(_BUILDERS)}"
         )
     cfg = builder(variant, base, output)
-    # Override output dir and scheduler for the shorter 7.5B-token run.
     return dc_replace(
         cfg,
         run=dc_replace(cfg.run, output_dir=str(output)),

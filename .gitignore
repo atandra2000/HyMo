@@ -37,6 +37,9 @@ logs/
 # Benchmarks
 .benchmarks/
 
+# Tracking / experiment logs
+wandb/
+
 # AI/Agent states
 .remember/
 

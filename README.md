@@ -1,45 +1,67 @@
+<div align="center">
+
 # HyMo
 
-**A 750M-active / 1.86B-stored hybrid language model** combining Gated Delta Networks (linear attention), Multi-Head Latent Attention (full attention), and Asymmetric Mixture-of-Experts. Pre-trained from scratch on 30B tokens — targeting held-out FineWeb-Edu PPL ≤ 2.10.
+**A 750M-active / 1.86B-stored hybrid language model** — Gated Delta Networks (linear attention) × Multi-Head Latent Attention (full attention) with Asymmetric Mixture-of-Experts. Pre-trained from scratch on 30B tokens, targeting held-out FineWeb-Edu perplexity ≤ 2.10.
 
-[![License](https://img.shields.io/badge/License-Apache_2.0-blue.svg)](https://opensource.org/licenses/Apache-2.0)
-[![Python 3.11+](https://img.shields.io/badge/python-3.11+-blue.svg)](https://www.python.org/downloads/)
-[![Code style: ruff](https://img.shields.io/badge/code%20style-ruff-000000.svg)](https://github.com/astral-sh/ruff)
-[![Type checked: mypy --strict](https://img.shields.io/badge/mypy--strict-3178C6)](https://mypy-lang.org/)
-[![Pre-commit: none](https://img.shields.io/badge/pre--commit-none-lightgrey)](https://pre-commit.com/)
+*The flagship model of the CoreProjects portfolio.*
+
+[![License: Apache 2.0](https://img.shields.io/badge/License-Apache_2.0-blue.svg)](https://opensource.org/licenses/Apache-2.0)
+[![Python 3.11+](https://img.shields.io/badge/python-3.11%2B-3776AB?logo=python&logoColor=white)](https://www.python.org/downloads/)
+[![PyTorch 2.5+](https://img.shields.io/badge/PyTorch-2.5%2B-EE4C2C?logo=pytorch&logoColor=white)](https://pytorch.org/)
+[![Code style: ruff](https://img.shields.io/badge/code%20style-ruff-000000?logo=astral&logoColor=white)](https://github.com/astral-sh/ruff)
+[![Type checked: mypy](https://img.shields.io/badge/mypy-checked-3178C6?logo=mypy&logoColor=white)](https://mypy-lang.org/)
+
+</div>
+
+---
+
+## Why HyMo
+
+Transformer attention scales quadratically with sequence length — the dominant cost of pretraining at scale. **HyMo is a hybrid**: it processes the bulk of the sequence through *linear-complexity* recurrence (Gated Delta Net) and reserves sparse *full-attention* anchors for genuine long-range reasoning. The result is a model that trains and infers far cheaper than an all-attention transformer of equal quality, while keeping the expressivity where it matters.
+
+The headline design choices:
+
+- **3:1 GDN-to-MLA ratio** — 24 linear-attention layers interleaved with 8 full-attention layers, so 75% of the stack is sub-quadratic.
+- **Asymmetric feed-forward** — MoE (sparse, expensive) lives only on the 8 full-attention MLA blocks; the 24 linear GDN blocks use cheap dense SwiGLU. Compute is spent where it buys the most.
+- **Custom Triton GDN kernel** — a fused 1D selective scan with chunked recurrence (`chunk_size=64`), written by hand for throughput and numerical parity with the reference scan.
 
 ---
 
 ## Architecture
 
-HyMo is a 32-layer stack with a **3:1 GDN-to-MLA ratio** — 24 linear-attention layers (Gated Delta Net) interleaved with 8 full-attention layers (Multi-Head Latent Attention). This hybrid design captures long-range context through sparse full-attention anchors while processing the bulk of the sequence through a linear-complexity recurrence.
+HyMo is a 32-layer stack with a **3:1 GDN-to-MLA ratio**.
 
 | Component | Layers | Type | Description |
 |---|---|---|---|
-| **GDN** | 24 | Linear attention | Gated Delta Net with 1D selective scan, partial RoPE, and Dense SwiGLU FFN |
+| **GDN** | 24 | Linear attention | Gated Delta Net with 1D selective scan, partial RoPE, dense SwiGLU FFN |
 | **MLA** | 8 | Full attention | Multi-Head Latent Attention (DeepSeek-style low-rank KV compression, 4 KV heads) |
 | **MoE** | On MLA layers | Sparse FFN | DeepSeekMoE (16 routed + 1 shared expert, top-2 routing) |
 | **FFN** | On GDN layers | Dense | SwiGLU, `inter_dim = 2560` |
 | **MTP** | 2 heads | Multi-token prediction | Auxiliary heads predicting next 2 tokens, weighted `[0.3, 0.1]` |
 
+**Model footprint (v1.0 config):** `dim = 896`, `n_heads = 16`, `max_seq_len = 4096`, `vocab_size = 64,256` (BPE-64k + 256-byte tokenizer). ~750M active / ~1.86B stored parameters.
+
 Key architectural invariants:
-- **Asymmetric feed-forward**: MoE is deployed exclusively on attention layers (MLA blocks); GDN blocks use dense SwiGLU throughout
-- **partial-RoPE**: Applied on the first 25% of `head_dim` at every position across all 32 layers
-- **MQA-4**: MLA compresses to 4 KV groups for efficient inference
-- **FP32 master weights**: Full numerical stability at the cost of 2× optimizer state
-- **Muon/AdamW dual optimizer**: NorMuon drives attention + GDN matrices; AdamW handles embeddings, norms, gates, and MoE experts
-- **μP initialization**: Maximal update parameterization for stable training at scale
+
+- **Asymmetric feed-forward** — MoE exclusively on MLA blocks; GDN blocks stay dense SwiGLU.
+- **Partial RoPE** — applied to the first 25% of `head_dim` at every position across all 32 layers.
+- **MQA-4** — MLA compresses to 4 KV groups for efficient inference.
+- **FP32 master weights** — full numerical stability; optimizer state held in float32.
+- **NorMuon / AdamW dual optimizer** — NorMuon drives attention + GDN 2D matrices; AdamW handles embeddings, norms, gates, and MoE experts. Cautious weight decay enabled.
+- **μP initialization** — maximal update parameterization for stable training at scale.
+- **Logit softcap (15.0)** — bounds logits for training stability.
 
 ---
 
 ## Features
 
-- **Custom Triton GDN kernel** — Optimized 1D selective scan with fused recurrence, chunked with `chunk_size=64`. Falls back to native PyTorch implementation on non-Linux platforms.
-- **FSDP-2 parameter sharding** — Full-sharding with BF16 mixed precision, gradient clipping by global norm, and NaN-step skipping with configurable tolerance.
-- **10-source data pipeline** — BPE-64k + 256-byte tokenizer, `np.memmap` zero-copy lazy loading, multi-process prefetching via `ShardWriter`/`ShardDataset`.
-- **Ablation framework** — 4 families of config derivation (GDN variants, MLA variants, MoE variants, optimizer variants) for systematic experimentation.
-- **Cool-by-design test suite** — Full model is replaced by a ~760K-parameter surrogate in default tests. The 1.86B model is only constructed when `--run-heavy` is passed. Default `pytest` run finishes in ~1 minute on an M1 Air.
-- **DCP checkpointing** — Distributed checkpoint save/load with resume-from-arbitrary-step support.
+- **Custom Triton GDN kernel** — optimized 1D selective scan with fused recurrence, chunked at `chunk_size=64`; native PyTorch fallback on non-Linux platforms.
+- **FSDP-2 full parameter sharding** — BF16 mixed precision, gradient clipping by global norm, NaN-step skipping with configurable tolerance.
+- **10-source data pipeline** — BPE-64k + 256-byte tokenizer, `np.memmap` zero-copy lazy loading, multi-process prefetching via `ShardWriter` / `ShardDataset`.
+- **Ablation framework** — 4 families of config derivation (GDN variants, MLA variants, MoE variants, optimizer variants) for systematic experimentation; configs are frozen dataclasses, variants derived via `dataclasses.replace`.
+- **Cool-by-design test suite** — the full 1.86B model is never built in default tests; a ~760K-param surrogate is used instead. Heavy tests (full model construction) are opt-in via `--run-heavy`. Default `pytest` finishes in ~1 minute on an M1 Air.
+- **DCP checkpointing** — distributed checkpoint save/load with resume-from-arbitrary-step support.
 
 ---
 
@@ -53,7 +75,7 @@ cd hymo
 uv sync --all-extras
 ```
 
-Core dependencies: PyTorch ≥2.5, NumPy, PyYAML, HuggingFace `tokenizers` + `datasets`, `safetensors`.
+Core dependencies: PyTorch ≥ 2.5, NumPy, PyYAML, HuggingFace `tokenizers` + `datasets`, `safetensors`.
 
 Optional extras:
 - `train` — Triton (Linux), `lm-eval`, `wandb`
@@ -75,25 +97,26 @@ logits, aux_losses = model(x)
 print(logits.shape)  # (2, 128, 64256)
 ```
 
-Run the test suite:
+Run the test suite and gates:
+
 ```bash
-pytest tests/ -v                # ~1 min on CPU, skips full model tests
+pytest tests/ -v                # ~1 min on CPU; full model tests skipped
 pytest tests/ --run-heavy       # includes full 1.86B model construction
-mypy src/hymo
-ruff check src/hymo
+mypy src/hymo                   # type gate
+ruff check src/hymo             # lint gate
 ```
 
 ---
 
 ## Configuration
 
-All hyperparameters live in YAML configs under `configs/`. The primary config is [`configs/hymo_750m.yaml`](configs/hymo_750m.yaml), which defines 5 frozen dataclass groups:
+All hyperparameters live in YAML configs under `configs/`. The primary config is [`configs/hymo_750m.yaml`](configs/hymo_750m.yaml), organized into 5 frozen dataclass groups:
 
 | Group | Class | Key knobs |
 |---|---|---|
-| `model` | `ModelConfig` | 32 layers, dim 896, 16 heads, 16 MoE experts, MTP depth 2 |
-| `optimizer` | `OptimizerConfig` | NorMuon LR 0.02, AdamW LR 3e-4, FP32 master weights |
-| `scheduler` | `SchedulerConfig` | WSD schedule, 57k total steps, 2% warmup, linear decay |
+| `model` | `ModelConfig` | 32 layers, dim 896, 16 heads, 16 MoE experts, MTP depth 2, seq 4096 |
+| `optimizer` | `OptimizerConfig` | NorMuon LR 0.02, AdamW LR 3e-4, FP32 master weights, cautious WD |
+| `scheduler` | `SchedulerConfig` | WSD schedule, ~57.2k total steps, 2% warmup, linear decay |
 | `training` | `TrainingConfig` | Micro-batch 4, grad accum 8, FSDP BF16, eval every 2k steps |
 | `run` | `RunConfig` | Seed 42, deterministic, distributed |
 
@@ -109,7 +132,7 @@ hymo/
 │   ├── hymo_750m.yaml        # Primary v1.0 config
 │   └── hymo_mixture.yaml     # Data mixture config
 ├── src/hymo/
-│   ├── core/                 # Config dataclasses, types, exceptions, validation
+│   ├── core/                 # Config dataclasses, types, exceptions, validation (PyTorch-free)
 │   ├── models/               # GDN, MLA, MoE, MTP, RoPE, μP init, Triton kernel
 │   ├── training/             # Trainer, dual optimizer, WSD scheduler, FSDP-2, checkpoint
 │   ├── data/                 # Tokenizer, 10 source loaders, sharding pipeline
@@ -120,7 +143,6 @@ hymo/
 │   ├── unit/                 # Module-level unit tests
 │   ├── integration/          # Cross-module integration tests
 │   └── conftest.py           # Tiny model fixtures (760K params)
-
 ```
 
 ---
@@ -129,14 +151,34 @@ hymo/
 
 | Phase | Status | Description |
 |---|---|---|
-| 1 — Repository foundation | ✅ **Done** | Clean architecture, public API, config system, CI gates |
-| 2 — Algorithmic model | ✅ **Done** | GDN, MLA, MoE, MTP, RoPE, μP init — all forward/backward finite |
-| 3 — Training infrastructure | ✅ **Done** | Trainer, dual optimizer, WSD scheduler, FSDP-2, DCP checkpointing |
-| 4 — Data & eval pipelines | ✅ **Done** | 10-source loader, tokenizer, sharding, eval harness, ablation framework |
-| 5 — Deployment & 30B run | ⏳ **Pending** | RunPod scripts, 30B-token pre-training on 4× A100 80GB SXM |
+| 1 — Repository foundation | ✅ Done | Clean architecture, public API, config system, CI gates |
+| 2 — Algorithmic model | ✅ Done | GDN, MLA, MoE, MTP, RoPE, μP init — all forward/backward finite |
+| 3 — Training infrastructure | ✅ Done | Trainer, dual optimizer, WSD scheduler, FSDP-2, DCP checkpointing |
+| 4 — Data & eval pipelines | ✅ Done | 10-source loader, tokenizer, sharding, eval harness, ablation framework |
+| 5 — Deployment & 30B run | ⏳ Pending | RunPod scripts, 30B-token pre-training on 4× A100 80GB SXM |
+
+The architecture, training, data, evaluation, and ablation pipelines are fully implemented. The 30B-token pre-training run on 4× A100 80GB is the remaining milestone.
+
+---
+
+## Engineering Principles
+
+- **Raw PyTorch first** — no HuggingFace `Trainer`, no Lightning. The loop, kernels, and distributed training are hand-written and deeply optimized (`torch.compile`, FSDP-2).
+- **Strong typing** — every public function is fully annotated; `mypy --strict` is a gate.
+- **No magic numbers** — all hyperparameters live in `configs/hymo_750m.yaml`; code references them via `hymo.core.config`.
+- **No circular dependencies** — `core ← registry ← utils ← {models, training, data, eval}`; `models` and `training` share state only through config and the registry.
+- **Fully implemented** — no `NotImplementedError` placeholders for core model logic.
 
 ---
 
 ## License
 
 Apache 2.0. See [LICENSE](LICENSE).
+
+---
+
+<div align="center">
+
+**Atandra Bharati** · [GitHub](https://github.com/atandra2000) · [LinkedIn](https://www.linkedin.com/in/atandrabharati) · [Portfolio](https://atandra2000.github.io/mycv)
+
+</div>

@@ -12,11 +12,6 @@ from typing import Any
 
 import yaml  # type: ignore[import-untyped]
 
-from hymo.core.exceptions import (
-    ConfigError,
-    ConfigNotFoundError,
-    ConfigValidationError,
-)
 from hymo.core.types import Step
 
 # ----------------------------------------------------------------------
@@ -82,49 +77,49 @@ class ModelConfig:
 
     def __post_init__(self) -> None:
         if self.vocab_size <= 0:
-            raise ConfigValidationError("vocab_size must be > 0")
+            raise ValueError("vocab_size must be > 0")
         if self.n_layers <= 0:
-            raise ConfigValidationError("n_layers must be > 0")
+            raise ValueError("n_layers must be > 0")
         if self.dim <= 0:
-            raise ConfigValidationError("dim must be > 0")
+            raise ValueError("dim must be > 0")
         if self.n_kv_groups <= 0 or self.n_heads % self.n_kv_groups != 0:
-            raise ConfigValidationError(
+            raise ValueError(
                 f"n_heads ({self.n_heads}) must be a multiple of n_kv_groups "
                 f"({self.n_kv_groups})"
             )
         if self.qk_rope_head_dim + self.qk_nope_head_dim != self.head_dim:
-            raise ConfigValidationError(
+            raise ValueError(
                 f"qk_rope_head_dim ({self.qk_rope_head_dim}) + "
                 f"qk_nope_head_dim ({self.qk_nope_head_dim}) must equal "
                 f"head_dim ({self.head_dim})"
             )
         if self.gdn_d_inner % self.gdn_headdim != 0:
-            raise ConfigValidationError(
+            raise ValueError(
                 f"gdn_d_inner ({self.gdn_d_inner}) must be a multiple of "
                 f"gdn_headdim ({self.gdn_headdim})"
             )
         if self.n_activated_experts > self.n_routed_experts:
-            raise ConfigValidationError(
+            raise ValueError(
                 f"n_activated_experts ({self.n_activated_experts}) cannot "
                 f"exceed n_routed_experts ({self.n_routed_experts})"
             )
         if self.mtp_depth < 0:
-            raise ConfigValidationError("mtp_depth must be >= 0")
+            raise ValueError("mtp_depth must be >= 0")
         if self.mtp_depth == 0:
             if len(self.mtp_loss_weights) != 0:
-                raise ConfigValidationError(
+                raise ValueError(
                     f"mtp_loss_weights must be empty when mtp_depth=0, "
                     f"got {len(self.mtp_loss_weights)} weights"
                 )
         elif len(self.mtp_loss_weights) != self.mtp_depth:
-            raise ConfigValidationError(
+            raise ValueError(
                 f"mtp_loss_weights length ({len(self.mtp_loss_weights)}) "
                 f"must equal mtp_depth ({self.mtp_depth})"
             )
         if any(w < 0 for w in self.mtp_loss_weights):
-            raise ConfigValidationError("mtp_loss_weights must be non-negative")
+            raise ValueError("mtp_loss_weights must be non-negative")
         if self.logit_softcap < 0:
-            raise ConfigValidationError("logit_softcap must be >= 0 (0 disables)")
+            raise ValueError("logit_softcap must be >= 0 (0 disables)")
 
     @property
     def n_mla_layers(self) -> int:
@@ -180,15 +175,15 @@ class OptimizerConfig:
 
     def __post_init__(self) -> None:
         if self.muon_lr <= 0 or self.adamw_lr <= 0:
-            raise ConfigValidationError("optimizer LRs must be > 0")
+            raise ValueError("optimizer LRs must be > 0")
         if not 0.0 <= self.muon_momentum < 1.0:
-            raise ConfigValidationError("muon_momentum must be in [0, 1)")
+            raise ValueError("muon_momentum must be in [0, 1)")
         for name, betas in (("muon_betas", self.muon_betas),
                             ("adamw_betas", self.adamw_betas)):
             if not (0.0 <= betas[0] < 1.0 and 0.0 <= betas[1] < 1.0):
-                raise ConfigValidationError(f"{name} must each be in [0, 1)")
+                raise ValueError(f"{name} must each be in [0, 1)")
         if self.master_weights_dtype not in ("float32", "bfloat16"):
-            raise ConfigValidationError(
+            raise ValueError(
                 f"master_weights_dtype must be 'float32' or 'bfloat16', "
                 f"got {self.master_weights_dtype!r}"
             )
@@ -207,22 +202,22 @@ class SchedulerConfig:
 
     def __post_init__(self) -> None:
         if self.total_steps <= 0:
-            raise ConfigValidationError("total_steps must be > 0")
+            raise ValueError("total_steps must be > 0")
         if not 0.0 < self.warmup_frac < 1.0:
-            raise ConfigValidationError("warmup_frac must be in (0, 1)")
+            raise ValueError("warmup_frac must be in (0, 1)")
         if not 0.0 < self.stable_frac < 1.0:
-            raise ConfigValidationError("stable_frac must be in (0, 1)")
+            raise ValueError("stable_frac must be in (0, 1)")
         if not 0.0 < self.decay_frac < 1.0:
-            raise ConfigValidationError("decay_frac must be in (0, 1)")
+            raise ValueError("decay_frac must be in (0, 1)")
         if abs(self.warmup_frac + self.stable_frac + self.decay_frac - 1.0) > 1e-6:
-            raise ConfigValidationError(
+            raise ValueError(
                 f"warmup_frac + stable_frac + decay_frac must equal 1.0, "
                 f"got {self.warmup_frac + self.stable_frac + self.decay_frac}"
             )
         if not 0.0 <= self.min_lr_ratio < 1.0:
-            raise ConfigValidationError("min_lr_ratio must be in [0, 1)")
+            raise ValueError("min_lr_ratio must be in [0, 1)")
         if self.decay not in ("linear", "cosine", "sqrt"):
-            raise ConfigValidationError(
+            raise ValueError(
                 f"decay must be 'linear', 'cosine', or 'sqrt', got {self.decay!r}"
             )
 
@@ -275,19 +270,19 @@ class TrainingConfig:
 
     def __post_init__(self) -> None:
         if self.micro_batch_size <= 0:
-            raise ConfigValidationError("micro_batch_size must be > 0")
+            raise ValueError("micro_batch_size must be > 0")
         if self.gradient_accumulation_steps <= 0:
-            raise ConfigValidationError("gradient_accumulation_steps must be > 0")
+            raise ValueError("gradient_accumulation_steps must be > 0")
         if self.world_size <= 0:
-            raise ConfigValidationError("world_size must be > 0")
+            raise ValueError("world_size must be > 0")
         if self.grad_clip <= 0:
-            raise ConfigValidationError("grad_clip must be > 0")
+            raise ValueError("grad_clip must be > 0")
         if self.save_interval <= 0 or self.eval_interval <= 0:
-            raise ConfigValidationError("save/eval intervals must be > 0")
+            raise ValueError("save/eval intervals must be > 0")
         if self.consecutive_nan_limit <= 0:
-            raise ConfigValidationError("consecutive_nan_limit must be > 0")
+            raise ValueError("consecutive_nan_limit must be > 0")
         if self.fsdp_mixed_precision not in ("bfloat16", "float32", "float16"):
-            raise ConfigValidationError(
+            raise ValueError(
                 f"fsdp_mixed_precision must be 'bfloat16', 'float32', or "
                 f"'float16', got {self.fsdp_mixed_precision!r}"
             )
@@ -318,9 +313,9 @@ class RunConfig:
 
     def __post_init__(self) -> None:
         if not self.name:
-            raise ConfigValidationError("name must be a non-empty string")
+            raise ValueError("name must be a non-empty string")
         if self.seed < 0:
-            raise ConfigValidationError("seed must be >= 0")
+            raise ValueError("seed must be >= 0")
 
 
 @dataclass(frozen=True)
@@ -383,16 +378,16 @@ def load_config(path: str | Path) -> HyMoConfig:
     """Load a HyMoConfig from a YAML file path."""
     path = Path(path)
     if not path.exists():
-        raise ConfigNotFoundError(f"Config file not found: {path}")
+        raise FileNotFoundError(f"Config file not found: {path}")
 
     try:
         with path.open("r", encoding="utf-8") as f:
             raw = yaml.safe_load(f)
     except yaml.YAMLError as e:
-        raise ConfigError(f"Failed to parse YAML at {path}: {e}") from e
+        raise ValueError(f"Failed to parse YAML at {path}: {e}") from e
 
     if not isinstance(raw, dict):
-        raise ConfigError(
+        raise ValueError(
             f"Top-level YAML must be a mapping, got {type(raw).__name__}"
         )
 
@@ -419,11 +414,11 @@ def _build_config(raw: dict[str, Any]) -> HyMoConfig:
         )
         run = RunConfig(**_filter(raw.get("run", {}), RunConfig))
     except TypeError as e:
-        raise ConfigError(f"Unknown / wrong-type config field: {e}") from e
-    except ConfigValidationError:
+        raise ValueError(f"Unknown / wrong-type config field: {e}") from e
+    except ValueError:
         raise
     except Exception as e:
-        raise ConfigError(f"Failed to build config: {e}") from e
+        raise ValueError(f"Failed to build config: {e}") from e
 
     return HyMoConfig(
         model=model,

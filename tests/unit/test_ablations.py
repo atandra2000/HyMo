@@ -8,7 +8,6 @@ import pytest
 
 from hymo.ablations import ABLATION_FAMILIES, AblationSpec, build_ablation_config
 from hymo.core.config import HyMoConfig
-from hymo.core.exceptions import AblationConfigError
 
 
 class TestAblationFamilies:
@@ -86,12 +85,12 @@ class TestBuildAblationConfig:
 
     def test_unknown_family_raises(self, tmp_path: Path) -> None:
         base = HyMoConfig()
-        with pytest.raises(AblationConfigError):
+        with pytest.raises(ValueError):
             build_ablation_config("unknown_family", "variant", base, tmp_path)
 
     def test_unknown_variant_raises(self, tmp_path: Path) -> None:
         base = HyMoConfig()
-        with pytest.raises(AblationConfigError):
+        with pytest.raises(ValueError):
             build_ablation_config("A_moe_on_attention", "unknown_variant", base, tmp_path)
 
     def test_scheduler_is_shorter(self, tmp_path: Path) -> None:

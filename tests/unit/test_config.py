@@ -19,7 +19,6 @@ from hymo.core.config import (
     load_config_from_dict,
     save_config,
 )
-from hymo.core.exceptions import ConfigValidationError
 
 FIXTURES = Path(__file__).parent.parent / "fixtures"
 
@@ -184,59 +183,59 @@ class TestValidation:
 
     @pytest.mark.parametrize("v", [0, -1, -100])
     def test_vocab_size_must_be_positive(self, v: int) -> None:
-        with pytest.raises(ConfigValidationError):
+        with pytest.raises(ValueError):
             ModelConfig(vocab_size=v)
 
     def test_n_layers_must_be_positive(self) -> None:
-        with pytest.raises(ConfigValidationError):
+        with pytest.raises(ValueError):
             ModelConfig(n_layers=0)
 
     def test_n_kv_groups_must_divide_n_heads(self) -> None:
-        with pytest.raises(ConfigValidationError):
+        with pytest.raises(ValueError):
             ModelConfig(n_heads=15, n_kv_groups=4)
 
     def test_qk_rope_plus_nope_equals_head_dim(self) -> None:
-        with pytest.raises(ConfigValidationError):
+        with pytest.raises(ValueError):
             ModelConfig(qk_rope_head_dim=10, qk_nope_head_dim=10, head_dim=128)
 
     def test_mtp_weights_length_must_equal_depth(self) -> None:
-        with pytest.raises(ConfigValidationError):
+        with pytest.raises(ValueError):
             ModelConfig(mtp_depth=2, mtp_loss_weights=(0.3,))
 
     def test_mtp_weights_must_be_nonneg(self) -> None:
-        with pytest.raises(ConfigValidationError):
+        with pytest.raises(ValueError):
             ModelConfig(mtp_depth=1, mtp_loss_weights=(-0.1,))
 
     def test_logit_softcap_must_be_non_negative(self) -> None:
-        with pytest.raises(ConfigValidationError):
+        with pytest.raises(ValueError):
             ModelConfig(logit_softcap=-1)
 
     def test_lr_must_be_positive(self) -> None:
-        with pytest.raises(ConfigValidationError):
+        with pytest.raises(ValueError):
             OptimizerConfig(muon_lr=0)
 
     def test_fractions_must_sum_to_one(self) -> None:
-        with pytest.raises(ConfigValidationError):
+        with pytest.raises(ValueError):
             SchedulerConfig(warmup_frac=0.01, stable_frac=0.83, decay_frac=0.15)
 
     def test_master_weights_dtype_must_be_known(self) -> None:
-        with pytest.raises(ConfigValidationError):
+        with pytest.raises(ValueError):
             OptimizerConfig(master_weights_dtype="float128")
 
     def test_decay_must_be_known(self) -> None:
-        with pytest.raises(ConfigValidationError):
+        with pytest.raises(ValueError):
             SchedulerConfig(decay="exponential")
 
     def test_grad_clip_must_be_positive(self) -> None:
-        with pytest.raises(ConfigValidationError):
+        with pytest.raises(ValueError):
             TrainingConfig(grad_clip=0)
 
     def test_run_name_must_be_nonempty(self) -> None:
-        with pytest.raises(ConfigValidationError):
+        with pytest.raises(ValueError):
             RunConfig(name="")
 
     def test_seed_must_be_nonneg(self) -> None:
-        with pytest.raises(ConfigValidationError):
+        with pytest.raises(ValueError):
             RunConfig(seed=-1)
 
 
@@ -270,8 +269,7 @@ class TestYamlRoundTrip:
         assert c.scheduler.total_steps == 1000
 
     def test_load_missing_file_raises(self, tmp_path: Path) -> None:
-        from hymo.core.exceptions import ConfigNotFoundError
-        with pytest.raises(ConfigNotFoundError):
+        with pytest.raises(FileNotFoundError):
             load_config(tmp_path / "does_not_exist.yaml")
 
 

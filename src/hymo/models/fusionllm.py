@@ -14,12 +14,10 @@ from hymo.core.config import HyMoConfig, ModelConfig
 from hymo.models.gdn import GatedDeltaNetBlock
 from hymo.models.mla import MLABlock
 from hymo.models.mtp import MultiTokenPrediction
-from hymo.registry import MODELS
 
 __all__ = ["HyMo", "build_hymo"]
 
 
-@MODELS.register("hymo")
 class HyMo(nn.Module):
     """The 32-layer 3:1 GDN:MLA hybrid model (architecture doc §2)."""
 

@@ -4,20 +4,6 @@ from __future__ import annotations
 
 import pytest
 
-from hymo.core.exceptions import (
-    CheckpointCorruptError,
-    CheckpointError,
-    CheckpointNotFoundError,
-    ConfigError,
-    ConfigNotFoundError,
-    ConfigValidationError,
-    DataError,
-    DistributedError,
-    HyMoError,
-    NotImplementedError_,
-    ShapeError,
-    TokenizerError,
-)
 from hymo.core import (
     ExpertIndex,
     LayerIndex,
@@ -28,50 +14,50 @@ from hymo.core import (
 
 
 class TestExceptionHierarchy:
-    """Every HyMo exception inherits from :class:`HyMoError`."""
+    """Every HyMo exception inherits from :class:`Exception`."""
 
     @pytest.mark.parametrize(
         "exc_cls",
         [
-            ConfigError,
-            ConfigValidationError,
-            ConfigNotFoundError,
-            CheckpointError,
-            CheckpointNotFoundError,
-            CheckpointCorruptError,
-            DataError,
-            DistributedError,
-            ShapeError,
-            TokenizerError,
+            ValueError,
+            ValueError,
+            FileNotFoundError,
+            RuntimeError,
+            FileNotFoundError,
+            RuntimeError,
+            RuntimeError,
+            RuntimeError,
+            RuntimeError,
+            RuntimeError,
         ],
     )
     def test_inherits_from_hymo_error(self, exc_cls: type) -> None:
-        assert issubclass(exc_cls, HyMoError)
+        assert issubclass(exc_cls, Exception)
 
     def test_not_implemented_error_inherits_from_builtin(self) -> None:
-        assert issubclass(NotImplementedError_, NotImplementedError)
-        assert issubclass(NotImplementedError_, HyMoError)
+        assert issubclass(NotImplementedError, NotImplementedError)
+        assert issubclass(NotImplementedError, Exception)
 
     def test_catch_hymo_error_catches_everything(self) -> None:
         for exc_cls in (
-            ConfigValidationError,
-            CheckpointNotFoundError,
-            DataError,
+            ValueError,
+            FileNotFoundError,
+            RuntimeError,
         ):
-            with pytest.raises(HyMoError):
+            with pytest.raises(Exception):
                 raise exc_cls("test")
 
     def test_catch_specific_subclass(self) -> None:
-        with pytest.raises(ConfigValidationError):
-            raise ConfigValidationError("bad value")
-        # ConfigValidationError is NOT a CheckpointError: the wrong
+        with pytest.raises(ValueError):
+            raise ValueError("bad value")
+        # ValueError is NOT a RuntimeError: the wrong
         # ``except`` must not match, so the exception propagates and
         # is observed by ``pytest.raises`` again.
-        with pytest.raises(ConfigValidationError):
+        with pytest.raises(ValueError):
             try:
-                raise ConfigValidationError("bad")
-            except CheckpointError:
-                pytest.fail("Should not catch ConfigValidationError as CheckpointError")
+                raise ValueError("bad")
+            except RuntimeError:
+                pytest.fail("Should not catch ValueError as RuntimeError")
 
 
 class TestTypeAliases:

@@ -11,8 +11,6 @@ from tokenizers import Tokenizer, pre_tokenizers
 from tokenizers.models import BPE
 from tokenizers.trainers import BpeTrainer
 
-from hymo.core.exceptions import TokenizerError
-from hymo.registry import TOKENIZERS
 
 __all__ = ["ExtendedTokenizer", "BYTE_VOCAB_SIZE", "train_bpe_tokenizer"]
 
@@ -61,7 +59,6 @@ def _byte_fallback_encode(
     return ids, tokens
 
 
-@TOKENIZERS.register("hymo-bpe-64k")
 class ExtendedTokenizer:
     """BPE-64k tokenizer with byte-level fallback for out-of-vocabulary tokens (IDs 64,000-64,255)."""
 
@@ -72,7 +69,7 @@ class ExtendedTokenizer:
     def load(self) -> ExtendedTokenizer:
         """Load tokenizer vocabulary and add special/fallback byte tokens."""
         if not self.path.exists():
-            raise TokenizerError(f"Tokenizer file not found: {self.path}")
+            raise RuntimeError(f"Tokenizer file not found: {self.path}")
         base = Tokenizer.from_file(str(self.path))
         base.add_special_tokens(
             [f"<{s}>" for s in ("unk", "s", "/s", "pad", "mask")]

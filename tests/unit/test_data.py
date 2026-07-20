@@ -8,11 +8,6 @@ import numpy as np
 import pytest
 import torch
 
-from hymo.core.exceptions import (
-    ConfigNotFoundError,
-    ConfigValidationError,
-    TokenizerError,
-)
 from hymo.data import (
     BYTE_VOCAB_SIZE,
     DataConfig,
@@ -27,9 +22,7 @@ from hymo.data import (
     TokenizationConfig,
     load_data_config,
     load_data_config_from_dict,
-    save_data_config,
 )
-from hymo.registry import DATA_SOURCES, TOKENIZERS
 
 FIXTURES = Path(__file__).parent.parent / "fixtures"
 
@@ -43,15 +36,15 @@ class TestSourceSpec:
         assert s.weight == 0.5
 
     def test_empty_id_raises(self) -> None:
-        with pytest.raises(ConfigValidationError):
+        with pytest.raises(ValueError):
             SourceSpec(id="", weight=0.5)
 
     def test_weight_must_be_positive(self) -> None:
-        with pytest.raises(ConfigValidationError):
+        with pytest.raises(ValueError):
             SourceSpec(id="x", weight=0)
-        with pytest.raises(ConfigValidationError):
+        with pytest.raises(ValueError):
             SourceSpec(id="x", weight=-0.1)
-        with pytest.raises(ConfigValidationError):
+        with pytest.raises(ValueError):
             SourceSpec(id="x", weight=1.5)
 
 
@@ -59,7 +52,7 @@ class TestDataConfig:
     """Verify DataConfig source settings and proportions."""
 
     def test_default_construct(self) -> None:
-        with pytest.raises(ConfigValidationError):
+        with pytest.raises(ValueError):
             DataConfig()
 
     def test_single_source(self) -> None:
@@ -87,7 +80,7 @@ class TestDataConfig:
             c.get_source("nope")
 
     def test_weights_must_sum_to_one(self) -> None:
-        with pytest.raises(ConfigValidationError):
+        with pytest.raises(ValueError):
             DataConfig(
                 sources=(
                     SourceSpec(id="a", weight=0.5),
@@ -96,7 +89,7 @@ class TestDataConfig:
             )
 
     def test_fractions_must_sum_to_one(self) -> None:
-        with pytest.raises(ConfigValidationError):
+        with pytest.raises(ValueError):
             DataConfig(
                 sources=(SourceSpec(id="a", weight=1.0),),
                 train_fraction=0.5,
@@ -121,15 +114,9 @@ class TestYamlRoundTrip:
         assert total == pytest.approx(1.0)
         assert c.sharding.target_total_tokens == 30_000_000_000
 
-    def test_save_and_reload(self, tmp_path: Path) -> None:
-        c = load_data_config(FIXTURES / "tiny_mixture.yaml")
-        out = tmp_path / "saved.yaml"
-        save_data_config(c, out)
-        reloaded = load_data_config(out)
-        assert reloaded == c
 
     def test_load_missing_file_raises(self, tmp_path: Path) -> None:
-        with pytest.raises(ConfigNotFoundError):
+        with pytest.raises(FileNotFoundError):
             load_data_config(tmp_path / "does_not_exist.yaml")
 
     def test_load_from_dict(self) -> None:
@@ -152,11 +139,11 @@ class TestShardingConfig:
         assert s.cross_document_boundary_ok is False
 
     def test_invalid_dtype_raises(self) -> None:
-        with pytest.raises(ConfigValidationError):
+        with pytest.raises(ValueError):
             ShardingConfig(dtype="float64")
 
     def test_invalid_size_raises(self) -> None:
-        with pytest.raises(ConfigValidationError):
+        with pytest.raises(ValueError):
             ShardingConfig(shard_size_tokens=0)
 
 
@@ -171,7 +158,7 @@ class TestTokenizationConfig:
         assert t.byte_fallback is True
 
     def test_invalid_vocab_size_raises(self) -> None:
-        with pytest.raises(ConfigValidationError):
+        with pytest.raises(ValueError):
             TokenizationConfig(vocab_size=0)
 
 
@@ -185,13 +172,13 @@ class TestDedupConfig:
         assert d.n_hash_buckets == 256
 
     def test_invalid_method_raises(self) -> None:
-        with pytest.raises(ConfigValidationError):
+        with pytest.raises(ValueError):
             DedupConfig(method="md5")
 
     def test_invalid_error_rate_raises(self) -> None:
-        with pytest.raises(ConfigValidationError):
+        with pytest.raises(ValueError):
             DedupConfig(bloom_error_rate=0)
-        with pytest.raises(ConfigValidationError):
+        with pytest.raises(ValueError):
             DedupConfig(bloom_error_rate=1.5)
 
 
@@ -216,11 +203,9 @@ class TestExtendedTokenizer:
 
     def test_load_missing_file_raises(self, tmp_path: Path) -> None:
         t = ExtendedTokenizer(tmp_path / "does_not_exist.json")
-        with pytest.raises(TokenizerError):
+        with pytest.raises(RuntimeError):
             t.load()
 
-    def test_registered(self) -> None:
-        assert TOKENIZERS.has("hymo-bpe-64k")
 
 
 class TestShardWriter:
@@ -292,22 +277,3 @@ class TestDataLoaderBuilder:
         assert batch[0].shape[0] == TrainingConfig().micro_batch_size
 
 
-class TestDataSourcesRegistered:
-    """Verify standard datamix sources are properly registered."""
-
-    def test_10_sources(self) -> None:
-        ids = {
-            "fineweb_edu_q3",
-            "fineweb",
-            "stack_python",
-            "stack_java",
-            "stack_cpp",
-            "slimpajama",
-            "dclm_baseline",
-            "dolma_wiki",
-            "dolma_books",
-            "cosmopedia",
-        }
-        for sid in ids:
-            assert DATA_SOURCES.has(sid), f"Source {sid!r} not registered"
-        assert len(DATA_SOURCES) >= 10

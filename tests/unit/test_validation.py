@@ -10,7 +10,6 @@ from hymo.core.config import (
     TrainingConfig,
 )
 from hymo.core.config_validation import validate_full_config
-from hymo.core.exceptions import ConfigValidationError
 
 
 class TestValidateFullConfig:
@@ -19,7 +18,7 @@ class TestValidateFullConfig:
         validate_full_config(HyMoConfig())
 
     def test_per_step_tokens_must_be_positive(self) -> None:
-        with pytest.raises(ConfigValidationError):
+        with pytest.raises(ValueError):
             c = HyMoConfig(
                 training=TrainingConfig(
                     micro_batch_size=0,
@@ -31,7 +30,7 @@ class TestValidateFullConfig:
             validate_full_config(c)
 
     def test_n_layers_must_be_multiple_of_4(self) -> None:
-        with pytest.raises(ConfigValidationError):
+        with pytest.raises(ValueError):
             c = HyMoConfig(model=ModelConfig(n_layers=5))
             validate_full_config(c)
 

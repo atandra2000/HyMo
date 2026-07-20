@@ -9,7 +9,6 @@ import pytest
 import torch
 
 from hymo.core.config import load_config
-from hymo.core.exceptions import NotImplementedError_
 from hymo.models import HyMo
 from hymo.training import (
     CheckpointState,
@@ -49,14 +48,14 @@ class TestFSDPPlaceholders:
 
     @pytest.mark.heavy
     def test_shard_nor_muon_params_raises(self) -> None:
-        with pytest.raises(NotImplementedError_):
+        with pytest.raises(NotImplementedError):
             shard_nor_muon_params(None, world_size=4)  # type: ignore[arg-type]
 
     @pytest.mark.heavy
     def test_wrap_model_with_fsdp_raises(self) -> None:
         config = load_config("configs/hymo_750m.yaml")
         model = HyMo(config.model)
-        with pytest.raises(NotImplementedError_):
+        with pytest.raises(NotImplementedError):
             wrap_model_with_fsdp(model, config.training)
 
 

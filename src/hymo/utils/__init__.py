@@ -19,14 +19,10 @@ from dataclasses import asdict, dataclass, field
 from datetime import datetime
 from typing import Any, TextIO
 from hymo.core.types import DType
-from hymo.core.exceptions import HyMoError
 
 __all__ = [
     "set_seed", "seed_for_rank",
-    "BF16", "FP32", "resolve_dtype", "autocast_disabled", "bf16_forward", "fp32_master_weights",
-    "CheckpointIOError", "atomic_write_bytes", "atomic_write_with",
-    "MetricsLogger", "MetricsRecord", "get_logger"
-]
+    "BF16", "FP32", "resolve_dtype", "autocast_disabled", "bf16_forward", "fp32_master_weights",]
 
 
 
@@ -103,11 +99,10 @@ def fp32_master_weights() -> Generator[None, None, None]:
 
 
 
-from hymo.core.exceptions import HyMoError
 
 
 
-class CheckpointIOError(HyMoError):
+class CheckpointIOError(Exception):
     """Atomic-write helper failed."""
 
 

@@ -151,8 +151,8 @@ def load_checkpoint(
 
     ckpt_dir = Path(path)
     if not ckpt_dir.exists() or not ckpt_dir.is_dir():
-        from hymo.core.exceptions import CheckpointNotFoundError
-        raise CheckpointNotFoundError(f"Checkpoint directory not found: {ckpt_dir}")
+        from hymo.core.exceptions import FileNotFoundError
+        raise FileNotFoundError(f"Checkpoint directory not found: {ckpt_dir}")
 
     # --- 1. Load tensors via DCP ---
     tensor_state: dict[str, Any] = {
@@ -163,8 +163,8 @@ def load_checkpoint(
     try:
         dcp.load(tensor_state, checkpoint_id=str(ckpt_dir))
     except Exception as e:
-        from hymo.core.exceptions import CheckpointCorruptError
-        raise CheckpointCorruptError(f"Failed to load checkpoint {ckpt_dir}: {e}") from e
+        from hymo.core.exceptions import RuntimeError
+        raise RuntimeError(f"Failed to load checkpoint {ckpt_dir}: {e}") from e
 
     model.load_state_dict(tensor_state["model"])
     _optimizer_load_state_dict(optimizers, tensor_state["optimizer"])

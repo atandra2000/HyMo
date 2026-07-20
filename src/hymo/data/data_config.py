@@ -12,13 +12,8 @@ from typing import Any
 
 import yaml
 
-from hymo.core.exceptions import (
-    ConfigError,
-    ConfigNotFoundError,
-    ConfigValidationError,
-)
 from hymo.core.types import Path as PathType
-from hymo.utils import atomic_write_with
+
 
 __all__ = [
     "DataConfig",
@@ -28,7 +23,6 @@ __all__ = [
     "DedupConfig",
     "QualityConfig",
     "load_data_config",
-    "save_data_config",
 ]
 
 
@@ -41,9 +35,9 @@ class SourceSpec:
 
     def __post_init__(self) -> None:
         if not self.id:
-            raise ConfigValidationError("SourceSpec.id must be non-empty")
+            raise ValueError("SourceSpec.id must be non-empty")
         if not 0.0 < self.weight <= 1.0:
-            raise ConfigValidationError(
+            raise ValueError(
                 f"SourceSpec.weight must be in (0, 1], got {self.weight}"
             )
 
@@ -61,11 +55,11 @@ class ShardingConfig:
 
     def __post_init__(self) -> None:
         if self.shard_size_tokens <= 0:
-            raise ConfigValidationError("shard_size_tokens must be > 0")
+            raise ValueError("shard_size_tokens must be > 0")
         if self.target_total_tokens <= 0:
-            raise ConfigValidationError("target_total_tokens must be > 0")
+            raise ValueError("target_total_tokens must be > 0")
         if self.dtype not in ("uint32", "uint16", "uint8", "int32"):
-            raise ConfigValidationError(
+            raise ValueError(
                 f"dtype must be 'uint32', 'uint16', 'uint8', or 'int32', "
                 f"got {self.dtype!r}"
             )
@@ -87,7 +81,7 @@ class TokenizationConfig:
 
     def __post_init__(self) -> None:
         if self.vocab_size <= 0:
-            raise ConfigValidationError("vocab_size must be > 0")
+            raise ValueError("vocab_size must be > 0")
 
 
 @dataclass(frozen=True)
@@ -102,11 +96,11 @@ class DedupConfig:
 
     def __post_init__(self) -> None:
         if self.method not in ("sha256", "bloom", "exact"):
-            raise ConfigValidationError(
+            raise ValueError(
                 f"method must be 'sha256', 'bloom', or 'exact', got {self.method!r}"
             )
         if not 0.0 < self.bloom_error_rate < 1.0:
-            raise ConfigValidationError("bloom_error_rate must be in (0, 1)")
+            raise ValueError("bloom_error_rate must be in (0, 1)")
 
 
 @dataclass(frozen=True)
@@ -121,14 +115,14 @@ class QualityConfig:
 
     def __post_init__(self) -> None:
         if not 0.0 <= self.min_unique_chars_ratio <= 1.0:
-            raise ConfigValidationError("min_unique_chars_ratio must be in [0, 1]")
+            raise ValueError("min_unique_chars_ratio must be in [0, 1]")
         for name, v in (
             ("max_digit_ratio", self.max_digit_ratio),
             ("max_punct_ratio", self.max_punct_ratio),
             ("max_whitespace_ratio", self.max_whitespace_ratio),
         ):
             if not 0.0 <= v <= 1.0:
-                raise ConfigValidationError(f"{name} must be in [0, 1], got {v}")
+                raise ValueError(f"{name} must be in [0, 1], got {v}")
 
 
 @dataclass(frozen=True)
@@ -148,14 +142,14 @@ class DataConfig:
 
     def __post_init__(self) -> None:
         if not self.sources:
-            raise ConfigValidationError("At least one source is required")
+            raise ValueError("At least one source is required")
         total = sum(s.weight for s in self.sources)
         if abs(total - 1.0) > 1e-6:
-            raise ConfigValidationError(
+            raise ValueError(
                 f"Sum of source weights must equal 1.0, got {total}"
             )
         if abs(self.train_fraction + self.val_fraction + self.test_fraction - 1.0) > 1e-6:
-            raise ConfigValidationError(
+            raise ValueError(
                 "train + val + test fractions must equal 1.0"
             )
 
@@ -169,24 +163,14 @@ class DataConfig:
         raise KeyError(f"Source {source_id!r} not in mixture")
 
 
-def _to_dict(obj: Any) -> Any:
-    """Recursively convert a dataclass to a plain dict for YAML dumping."""
-    if hasattr(obj, "__dataclass_fields__"):
-        from dataclasses import fields
-
-        return {f.name: _to_dict(getattr(obj, f.name)) for f in fields(obj)}
-    if isinstance(obj, (list, tuple)):
-        return [_to_dict(x) for x in obj]
-    if isinstance(obj, dict):
-        return {k: _to_dict(v) for k, v in obj.items()}
-    return obj
+from dataclasses import asdict
 
 
 def _build_data_config(raw: dict[str, Any]) -> DataConfig:
     """Build a DataConfig from a raw dict."""
     sources_raw = raw.get("sources", [])
     if not sources_raw:
-        raise ConfigValidationError("At least one source is required")
+        raise ValueError("At least one source is required")
     sources = tuple(
         SourceSpec(id=s["id"], weight=float(s["weight"])) for s in sources_raw
     )
@@ -212,14 +196,14 @@ def load_data_config(path: str | PathType) -> DataConfig:
     """Load a DataConfig from a YAML file."""
     path = Path(path)
     if not path.exists():
-        raise ConfigNotFoundError(f"Data config file not found: {path}")
+        raise FileNotFoundError(f"Data config file not found: {path}")
     try:
         with path.open("r", encoding="utf-8") as f:
             raw = yaml.safe_load(f)
     except yaml.YAMLError as e:
-        raise ConfigError(f"Failed to parse YAML at {path}: {e}") from e
+        raise ValueError(f"Failed to parse YAML at {path}: {e}") from e
     if not isinstance(raw, dict):
-        raise ConfigError(
+        raise ValueError(
             f"Top-level YAML must be a mapping, got {type(raw).__name__}"
         )
     return _build_data_config(raw)
@@ -230,11 +214,4 @@ def load_data_config_from_dict(raw: dict[str, Any]) -> DataConfig:
     return _build_data_config(raw)
 
 
-def save_data_config(config: DataConfig, path: str | PathType) -> None:
-    """Dump a DataConfig to YAML atomically."""
 
-    def writer(tmp: Path) -> None:
-        with tmp.open("w", encoding="utf-8") as f:
-            yaml.safe_dump(_to_dict(config), f, sort_keys=False, default_flow_style=False)
-
-    atomic_write_with(path, writer)

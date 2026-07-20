@@ -11,7 +11,6 @@ from typing import Any
 
 from datasets import load_dataset
 
-from hymo.registry import DATA_SOURCES
 
 __all__ = [
     "load_fineweb_edu",
@@ -27,7 +26,6 @@ __all__ = [
 ]
 
 
-@DATA_SOURCES.register("fineweb_edu_q3")
 def load_fineweb_edu(
     *, quality_threshold: int = 3, **kwargs: Any
 ) -> Iterator[dict[str, Any]]:
@@ -45,7 +43,6 @@ def load_fineweb_edu(
     yield from ds
 
 
-@DATA_SOURCES.register("fineweb")
 def load_fineweb(**kwargs: Any) -> Iterator[dict[str, Any]]:
     """Stream non-edu FineWeb rows."""
     ds = load_dataset(
@@ -59,7 +56,6 @@ def load_fineweb(**kwargs: Any) -> Iterator[dict[str, Any]]:
     yield from ds
 
 
-@DATA_SOURCES.register("stack_python")
 def load_stack_python(**kwargs: Any) -> Iterator[dict[str, Any]]:
     """Stream Stack v2 Python rows."""
     ds = load_dataset(
@@ -73,7 +69,6 @@ def load_stack_python(**kwargs: Any) -> Iterator[dict[str, Any]]:
     yield from ds
 
 
-@DATA_SOURCES.register("stack_java")
 def load_stack_java(**kwargs: Any) -> Iterator[dict[str, Any]]:
     """Stream Stack v2 Java rows."""
     ds = load_dataset(
@@ -87,7 +82,6 @@ def load_stack_java(**kwargs: Any) -> Iterator[dict[str, Any]]:
     yield from ds
 
 
-@DATA_SOURCES.register("stack_cpp")
 def load_stack_cpp(**kwargs: Any) -> Iterator[dict[str, Any]]:
     """Stream Stack v2 C++ rows."""
     ds = load_dataset(
@@ -101,7 +95,6 @@ def load_stack_cpp(**kwargs: Any) -> Iterator[dict[str, Any]]:
     yield from ds
 
 
-@DATA_SOURCES.register("slimpajama")
 def load_slimpajama(**kwargs: Any) -> Iterator[dict[str, Any]]:
     """Stream SlimPajama rows."""
     ds = load_dataset(
@@ -114,7 +107,6 @@ def load_slimpajama(**kwargs: Any) -> Iterator[dict[str, Any]]:
     yield from ds
 
 
-@DATA_SOURCES.register("dclm_baseline")
 def load_dclm_baseline(**kwargs: Any) -> Iterator[dict[str, Any]]:
     """Stream DataComp for Language Models baseline rows."""
     ds = load_dataset(
@@ -127,7 +119,6 @@ def load_dclm_baseline(**kwargs: Any) -> Iterator[dict[str, Any]]:
     yield from ds
 
 
-@DATA_SOURCES.register("dolma_wiki")
 def load_dolma_wiki(**kwargs: Any) -> Iterator[dict[str, Any]]:
     """Stream Wikipedia (Dolma subset) rows."""
     ds = load_dataset(
@@ -141,7 +132,6 @@ def load_dolma_wiki(**kwargs: Any) -> Iterator[dict[str, Any]]:
     yield from ds
 
 
-@DATA_SOURCES.register("dolma_books")
 def load_dolma_books(**kwargs: Any) -> Iterator[dict[str, Any]]:
     """Stream Books (Dolma) rows."""
     ds = load_dataset(
@@ -155,7 +145,6 @@ def load_dolma_books(**kwargs: Any) -> Iterator[dict[str, Any]]:
     yield from ds
 
 
-@DATA_SOURCES.register("cosmopedia")
 def load_cosmopedia(**kwargs: Any) -> Iterator[dict[str, Any]]:
     """Stream Cosmopedia synthetic textbook rows."""
     ds = load_dataset(

@@ -13,7 +13,6 @@ from hymo.data.data_config import (
     TokenizationConfig,
     load_data_config,
     load_data_config_from_dict,
-    save_data_config,
 )
 from hymo.data.sharding import DataLoaderBuilder, ShardDataset, ShardWriter
 from hymo.data.sources import (
@@ -40,7 +39,6 @@ __all__ = [
     "TokenizationConfig",
     "load_data_config",
     "load_data_config_from_dict",
-    "save_data_config",
     # Sharding
     "DataLoaderBuilder",
     "ShardDataset",

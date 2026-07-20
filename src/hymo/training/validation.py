@@ -12,7 +12,6 @@ import torch
 from torch import nn
 from torch.nn import functional as F
 
-from hymo.core.exceptions import DataError
 
 __all__ = ["get_val_batch", "compute_validation_loss", "ValMetrics"]
 
@@ -38,7 +37,7 @@ def _load_val_tokens(path: Path = DEFAULT_VAL_BIN) -> npt.NDArray[np.uint32]:
     global _val_cache, _val_cache_path
     if _val_cache is None or _val_cache_path != path:
         if not path.exists():
-            raise DataError(
+            raise RuntimeError(
                 f"Validation binary not found: {path}. "
                 f"Run the data prep pipeline first (Phase 4, roadmap A7)."
             )

@@ -2,6 +2,7 @@
 
 from __future__ import annotations
 
+from dataclasses import dataclass
 from typing import Any
 
 from hymo.eval.baselines import TASK_TO_METRIC
@@ -9,22 +10,13 @@ from hymo.eval.baselines import TASK_TO_METRIC
 __all__ = ["run_harness_eval", "EvalResult"]
 
 
+@dataclass
 class EvalResult:
     """The result of a single task eval run."""
-
-    __slots__ = ("task", "metric", "value", "stderr")
-
-    def __init__(
-        self,
-        task: str,
-        metric: str,
-        value: float,
-        stderr: float | None = None,
-    ) -> None:
-        self.task = task
-        self.metric = metric
-        self.value = value
-        self.stderr = stderr
+    task: str
+    metric: str
+    value: float
+    stderr: float | None = None
 
     def __repr__(self) -> str:
         s = f"{self.value:.4f}"

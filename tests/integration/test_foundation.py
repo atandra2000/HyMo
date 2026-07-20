@@ -14,14 +14,12 @@ from hymo import (
     load_config,
 )
 from hymo.models import HyMo
-from hymo.registry import MODELS, Registry
 from hymo.training import (
     CautiousAdamW,
     NorMuon,
     build_optimizers,
     partition_parameters,
 )
-from hymo.utils import MetricsLogger
 
 
 class TestPublicApi:
@@ -39,14 +37,7 @@ class TestPublicApi:
         assert NorMuon is not None
         assert CautiousAdamW is not None
 
-    def test_utils_classes_exported(self) -> None:
-        assert MetricsLogger is not None
 
-    def test_registry_exported(self) -> None:
-        from hymo.registry import DATA_SOURCES, MODELS, TOKENIZERS
-        assert isinstance(MODELS, Registry)
-        assert isinstance(TOKENIZERS, Registry)
-        assert isinstance(DATA_SOURCES, Registry)
 
 
 class TestEndToEndConfig:
@@ -223,34 +214,3 @@ class TestDerivedConfig:
         assert derived.model.mtp_loss_weights == ()
 
 
-class TestMetricsLoggerRoundTrip:
-    """Verify MetricsLogger round trip saving and loading."""
-
-    def test_log_and_replay(self, tmp_path: Path) -> None:
-        path = tmp_path / "metrics.jsonl"
-        with MetricsLogger(path) as m:
-            for step in range(5):
-                m.log(step=step, loss=11.0 - step * 0.1, lr=step * 1e-5)
-
-        recs = list(MetricsLogger(path).iter_records())
-        assert len(recs) == 5
-        assert [r.step for r in recs] == [0, 1, 2, 3, 4]
-        assert recs[0].metrics["loss"] == pytest.approx(11.0)
-        assert recs[4].metrics["loss"] == pytest.approx(10.6)
-
-
-class TestModelRegistry:
-    """Verify the HyMo class is registered and can be built."""
-
-    def test_hymo_registered(self) -> None:
-        assert MODELS.has("hymo")
-        cls = MODELS.get("hymo")
-        assert cls is HyMo
-
-    def test_build_via_registry(self) -> None:
-        from hymo.core.config import HyMoConfig
-
-        config = HyMoConfig()
-        cls = MODELS.get("hymo")
-        model = cls(config.model)
-        assert isinstance(model, HyMo)

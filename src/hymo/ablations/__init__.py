@@ -13,7 +13,6 @@ from hymo.core.config import (
     HyMoConfig,
     SchedulerConfig,
 )
-from hymo.core.exceptions import AblationConfigError
 from hymo.core.types import Step
 
 __all__ = [
@@ -81,7 +80,7 @@ def _build_ablation_config_A(
             ),
             run=dc_replace(base.run, name="A_moe_on_attention-every_layer"),
         )
-    raise AblationConfigError(
+    raise ValueError(
         f"Unknown variant {variant!r} for family A_moe_on_attention"
     )
 
@@ -110,7 +109,7 @@ def _build_ablation_config_B(
             base,
             run=dc_replace(base.run, name="B_optimizer-nor_muon_all"),
         )
-    raise AblationConfigError(
+    raise ValueError(
         f"Unknown variant {variant!r} for family B_optimizer_partition"
     )
 
@@ -144,7 +143,7 @@ def _build_ablation_config_C(
             base,
             run=dc_replace(base.run, name="C_mtp_depth-depth_2"),
         )
-    raise AblationConfigError(
+    raise ValueError(
         f"Unknown variant {variant!r} for family C_mtp_depth"
     )
 
@@ -170,7 +169,7 @@ def _build_ablation_config_D(
             ),
             run=dc_replace(base.run, name="D_mqa4_vs_gqa175-gqa_1_75"),
         )
-    raise AblationConfigError(
+    raise ValueError(
         f"Unknown variant {variant!r} for family D_mqa4_vs_gqa175"
     )
 
@@ -193,7 +192,7 @@ def build_ablation_config(
     output = Path(output_dir)
     builder = _BUILDERS.get(family)
     if builder is None:
-        raise AblationConfigError(
+        raise ValueError(
             f"Unknown ablation family {family!r}. "
             f"Valid: {list(_BUILDERS)}"
         )

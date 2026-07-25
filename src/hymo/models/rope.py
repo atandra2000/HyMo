@@ -37,7 +37,6 @@ class RotaryEmbedding(nn.Module):
         self.theta = theta
         self._dtype = dtype or torch.float32
 
-        # Precompute the cos/sin tables once as non-persistent buffers
         freqs = 1.0 / (theta ** (torch.arange(0, head_dim, 2, dtype=torch.float32) / head_dim))
         positions = torch.arange(max_seq_len, dtype=torch.float32)
         angles = torch.outer(positions, freqs)
@@ -45,10 +44,6 @@ class RotaryEmbedding(nn.Module):
         sin_tab = angles.sin().repeat_interleave(2, dim=-1)
         self.register_buffer("cos_cached", cos_tab.to(self._dtype), persistent=False)
         self.register_buffer("sin_cached", sin_tab.to(self._dtype), persistent=False)
-
-        # Typed references for type-checking
-        self._cos: torch.Tensor = self.cos_cached  # type: ignore[assignment]
-        self._sin: torch.Tensor = self.sin_cached  # type: ignore[assignment]
 
     def apply_rope(
         self,
@@ -70,10 +65,9 @@ class RotaryEmbedding(nn.Module):
                 f"max_seq_len ({self.max_seq_len})"
             )
 
-        cos = self._cos[start_pos:start_pos + seq_len].to(x.dtype).view(1, seq_len, self.head_dim)
-        sin = self._sin[start_pos:start_pos + seq_len].to(x.dtype).view(1, seq_len, self.head_dim)
+        cos = self.cos_cached[start_pos:start_pos + seq_len].to(x.dtype).view(1, seq_len, self.head_dim)
+        sin = self.sin_cached[start_pos:start_pos + seq_len].to(x.dtype).view(1, seq_len, self.head_dim)
 
-        # Strided pairing for adjacent elements rotation
         cos_even, cos_odd = cos[..., 0::2], cos[..., 1::2]
         sin_even, sin_odd = sin[..., 0::2], sin[..., 1::2]
         x_even, x_odd = x[..., 0::2], x[..., 1::2]

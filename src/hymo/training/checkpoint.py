@@ -37,7 +37,7 @@ class CheckpointState:
 
 def _capture_rng_state() -> dict[str, Any]:
     """Capture current Python, NumPy, and PyTorch RNG states."""
-    py_state = random.getstate()  # (version: int, internalstate: tuple[int,...], gaussflag: float|None)
+    py_state = random.getstate()
     return {
         "python": {"version": py_state[0], "internalstate": list(py_state[1]), "gauss": py_state[2]},
         "numpy": np.random.get_state(),
@@ -69,7 +69,6 @@ def _restore_rng_state(rng_state: dict[str, Any]) -> None:
     """Restore previously captured Python, NumPy, and PyTorch RNG states."""
     if "python" in rng_state:
         py = rng_state["python"]
-        # Reconstruct the 3-tuple (version, internalstate_tuple, gaussflag)
         random.setstate((py["version"], tuple(py["internalstate"]), py["gauss"]))
     if "numpy" in rng_state:
         np.random.set_state(rng_state["numpy"])
@@ -118,7 +117,6 @@ def save_checkpoint(
 
     rng_state = state.rng_state if state.rng_state is not None else _capture_rng_state()
 
-    # --- 1. Save tensors (model, optimizers, scheduler) via DCP ---
     tensor_state: dict[str, Any] = {
         "model": model.state_dict(),
         "optimizer": _optimizer_state_dict(optimizers),
@@ -126,7 +124,6 @@ def save_checkpoint(
     }
     dcp.save(tensor_state, checkpoint_id=str(ckpt_dir))
 
-    # --- 2. Save scalar metadata as JSON (DCP cannot handle arbitrary Python objects) ---
     meta: dict[str, Any] = {
         "step": state.step,
         "token_count": state.token_count,
@@ -151,10 +148,8 @@ def load_checkpoint(
 
     ckpt_dir = Path(path)
     if not ckpt_dir.exists() or not ckpt_dir.is_dir():
-        from hymo.core.exceptions import FileNotFoundError
         raise FileNotFoundError(f"Checkpoint directory not found: {ckpt_dir}")
 
-    # --- 1. Load tensors via DCP ---
     tensor_state: dict[str, Any] = {
         "model": model.state_dict(),
         "optimizer": _optimizer_state_dict(optimizers),
@@ -163,14 +158,12 @@ def load_checkpoint(
     try:
         dcp.load(tensor_state, checkpoint_id=str(ckpt_dir))
     except Exception as e:
-        from hymo.core.exceptions import RuntimeError
         raise RuntimeError(f"Failed to load checkpoint {ckpt_dir}: {e}") from e
 
     model.load_state_dict(tensor_state["model"])
     _optimizer_load_state_dict(optimizers, tensor_state["optimizer"])
     scheduler.load_state_dict(tensor_state["scheduler"])
 
-    # --- 2. Load scalar metadata from JSON sidecar ---
     meta_path = ckpt_dir / _METADATA_FILE
     meta: dict[str, Any] = {}
     if meta_path.exists():

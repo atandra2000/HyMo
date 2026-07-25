@@ -93,9 +93,6 @@ class Trainer:
         self.micro_step: int = 0
         self.token_count: int = 0
         self.best_loss: float = float("inf")
-        
-        # Removed whole-model torch.compile() because it is incompatible with FSDP-2
-        # and MoE dynamic shapes. GDN blocks are now compiled individually.
 
         if config.model.mtp_depth > 0:
             self._has_mtp = True
@@ -153,7 +150,6 @@ class Trainer:
                 metrics={"main_loss": float("nan"), **mtp_details},
             )
 
-        # Scale loss for gradient accumulation
         scaled_loss = total_loss / self._config.training.gradient_accumulation_steps
         scaled_loss.backward()
 
@@ -202,7 +198,6 @@ class Trainer:
         if tag is None:
             tag = f"step_{self.step}"
         output_dir = Path(self._config.run.output_dir)
-        # DCP writes a directory, not a single file — use ckpt_dir as the checkpoint ID.
         ckpt_dir = output_dir / tag
 
         state = CheckpointState(
@@ -225,7 +220,6 @@ class Trainer:
     def load(self, path: str | Path) -> int:
         """Load a DCP checkpoint directory and restore training state."""
         p = Path(path)
-        # DCP checkpoint_id is a directory; no sub-file redirect needed.
 
         state = load_checkpoint(
             path=p,

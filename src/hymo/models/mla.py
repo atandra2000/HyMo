@@ -39,14 +39,12 @@ class MultiHeadLatentAttention(nn.Module):
         q_lora_rank = config.q_lora_rank
         v_head_dim = config.v_head_dim
 
-        # Query path projection
         self.wq_a = nn.Linear(d, q_lora_rank, bias=False)
         self.q_norm = nn.RMSNorm(q_lora_rank)
         self.wq_b = nn.Linear(
             q_lora_rank, n_heads * (qk_rope_head_dim + qk_nope_head_dim), bias=False
         )
 
-        # KV compression. wkv_a produces joint latent & key position embedding
         self.wkv_a = nn.Linear(d, kv_lora_rank + qk_rope_head_dim, bias=False)
         self.kv_norm = nn.RMSNorm(kv_lora_rank)
         self.wkv_b = nn.Linear(
@@ -55,10 +53,8 @@ class MultiHeadLatentAttention(nn.Module):
             bias=False,
         )
 
-        # Output projection
         self.wo = nn.Linear(n_heads * v_head_dim, d, bias=False)
 
-        # Per-head RMSNorm scaling applied post-split
         self.q_norm_qk = nn.Parameter(
             torch.ones(n_heads * (qk_rope_head_dim + qk_nope_head_dim))
         )
@@ -66,7 +62,6 @@ class MultiHeadLatentAttention(nn.Module):
             torch.ones(n_kv_groups * qk_rope_head_dim)
         )
 
-        # Decoupled Rotary Position Embedding
         self.rope = RotaryEmbedding(
             head_dim=qk_rope_head_dim,
             max_seq_len=config.max_seq_len,
@@ -101,7 +96,6 @@ class MultiHeadLatentAttention(nn.Module):
             self.qk_rope_head_dim, self.qk_nope_head_dim, self.v_head_dim
         )
 
-        # Query path: compress -> scale -> split to decoupled RoPE / nope
         q_latent = self.q_norm(self.wq_a(x))
         q = self.wq_b(q_latent)
         head_dim_q = D_pe + D_nope
@@ -112,7 +106,6 @@ class MultiHeadLatentAttention(nn.Module):
             q_pe.permute(0, 2, 1, 3)
         ).permute(0, 2, 1, 3)
 
-        # KV path: compress to joint latent & shared key position (k_pe)
         kv = self.wkv_a(x)
         kv_latent, k_pe = kv.split(
             [self._config.kv_lora_rank, D_pe], dim=-1
@@ -121,17 +114,14 @@ class MultiHeadLatentAttention(nn.Module):
         kv_out = self.wkv_b(kv_latent).view(B, T, G, D_nope + D_v)
         k_nope = kv_out[..., :D_nope]
         v = kv_out[..., D_nope:]
-        # Scale and apply RoPE to the shared position key k_pe across groups
         k_pe_normed = k_pe.unsqueeze(2) * self.k_norm_qk.view(1, 1, G, D_pe)
         k_pe_rot = self.rope.apply_rope(
             k_pe_normed.permute(0, 2, 1, 3)
         ).permute(0, 2, 1, 3)
 
-        # Reconstruct keys and queries by concatenating position-encoded and non-position-encoded components
         q_assembled = torch.cat([q_pe_rot, q_nope], dim=-1)
         k_assembled = torch.cat([k_pe_rot, k_nope], dim=-1)
 
-        # SDPA with MQA-4 broadcast. Prefers hardware GQA support (PyTorch >= 2.5), otherwise falls back.
         q_sdpa = q_assembled.permute(0, 2, 1, 3)
         k_sdpa = k_assembled.permute(0, 2, 1, 3)
         v_sdpa = v.permute(0, 2, 1, 3)

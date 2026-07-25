@@ -54,17 +54,14 @@ def shard_nor_muon_params(
     world_size: int,
 ) -> RankedParamShard:
     """NorMuon parameter shard optimizer balancer."""
-    # Collect all parameters requiring grad that are suitable for NorMuon (e.g. 2D matrices)
     params = [p for p in model.parameters() if p.requires_grad and p.ndim == 2]
     
-    # Sort by size descending
     params.sort(key=lambda p: p.numel(), reverse=True)
     
     rank_assignments: list[list[nn.Parameter]] = [[] for _ in range(world_size)]
     rank_byte_counts = [0 for _ in range(world_size)]
     
     for p in params:
-        # Find rank with minimum bytes
         min_rank = min(range(world_size), key=lambda r: rank_byte_counts[r])
         rank_assignments[min_rank].append(p)
         rank_byte_counts[min_rank] += p.numel() * p.element_size()
@@ -85,7 +82,7 @@ def wrap_model_with_fsdp(
         from torch.distributed.fsdp import FullyShardedDataParallel as FSDP
         from torch.distributed.fsdp import MixedPrecision
     except ImportError:
-        return model  # Fallback if distributed is not available
+        return model
 
     if auto_wrap_policy is None:
         auto_wrap_policy = fsdp_auto_wrap_policy

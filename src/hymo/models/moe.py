@@ -68,12 +68,10 @@ class DeepSeekMoE(nn.Module):
         self.ema_alpha = config.moe_ema_alpha
         self.capacity_factor = config.moe_capacity_factor
 
-        # Router/Gate
         self.gate = nn.Linear(config.dim, self.n_routed, bias=True)
         nn.init.zeros_(self.gate.bias)
         nn.init.normal_(self.gate.weight, std=0.006)
 
-        # Experts
         self.experts = nn.ModuleList(
             [SwiGLUExpert(config.dim, self.moe_inter_dim) for _ in range(self.n_routed)]
         )
@@ -84,7 +82,6 @@ class DeepSeekMoE(nn.Module):
         else:
             self.shared_expert = None
 
-        # EMA-tracked expert load counts
         self.register_buffer(
             "ema_expert_counts",
             torch.zeros(self.n_routed),
@@ -132,12 +129,10 @@ class DeepSeekMoE(nn.Module):
         capacity = int(self.capacity_factor * (B * T * k) / self.n_routed)
         capacity = max(capacity, 1)
 
-        # Batch token routing to experts up to capacity limit
         for e in range(self.n_routed):
             e_mask = (top_indices == e)
             flat_mask = e_mask.any(dim=-1).reshape(-1)
             sel = flat_mask.nonzero(as_tuple=False).reshape(-1)
-            # Use 32-bit indices to reduce memory bandwidth
             sel = sel.to(torch.int32)
             if sel.numel() == 0:
                 continue
@@ -148,7 +143,8 @@ class DeepSeekMoE(nn.Module):
             ).sum(dim=-1).reshape(-1)
             w_e = w_e[sel].unsqueeze(-1)
             y_e = self.experts[e](x_flat[sel])
-            out.index_add_(0, sel, y_e * w_e)
+            y_e = y_e.to(out.dtype)
+            out.index_add_(0, sel, y_e * w_e.to(out.dtype))
 
         if self.shared_expert is not None:
             out = out + self.shared_expert(x_flat)

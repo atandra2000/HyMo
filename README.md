@@ -138,7 +138,7 @@ hymo/
 │   ├── data/                 # Tokenizer, 10 source loaders, sharding pipeline
 │   ├── eval/                 # lm-eval harness, baselines, comparison runner
 │   ├── ablations/            # Config derivation for systematic ablations
-│   └── registry/             # Global plug-and-play component registry
+│   └── utils/                # Seeding, dtype helpers, atomic writes, JSONL metrics logging
 ├── tests/
 │   ├── unit/                 # Module-level unit tests
 │   ├── integration/          # Cross-module integration tests
@@ -166,7 +166,7 @@ The architecture, training, data, evaluation, and ablation pipelines are fully i
 - **Raw PyTorch first** — no HuggingFace `Trainer`, no Lightning. The loop, kernels, and distributed training are hand-written and deeply optimized (`torch.compile`, FSDP-2).
 - **Strong typing** — every public function is fully annotated; `mypy --strict` is a gate.
 - **No magic numbers** — all hyperparameters live in `configs/hymo_750m.yaml`; code references them via `hymo.core.config`.
-- **No circular dependencies** — `core ← registry ← utils ← {models, training, data, eval}`; `models` and `training` share state only through config and the registry.
+- **No circular dependencies** — `core ← utils ← {models, training, data, eval}`; `models` and `training` share state only through config.
 - **Fully implemented** — no `NotImplementedError` placeholders for core model logic.
 
 ---

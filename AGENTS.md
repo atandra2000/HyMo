@@ -18,9 +18,9 @@ project.
   loop is a hard error. Use ``dataclasses.replace`` to derive variants.
 - **Algorithmic Logic is Active (Phase 3/4).** Models are fully implemented. Do not use `NotImplementedError` placeholders unless stubbing out future experiments.
 - **No circular dependencies.** The dependency graph is strictly:
-  ``core ← registry ← utils ← {models, training, data, eval}``.
+  ``core ← utils ← {models, training, data, eval}``.
   ``models`` and ``training`` do not import each other directly; they
-  share state through the config and the registry.
+  share state through the config.
 
 ## Subagent routing
 

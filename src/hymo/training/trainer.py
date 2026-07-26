@@ -24,23 +24,9 @@ from hymo.training.validation import (
     compute_validation_loss,
 )
 
-__all__ = ["Trainer", "TrainerConfig", "train_step_result"]
+__all__ = ["Trainer", "train_step_result"]
 
 log = logging.getLogger(__name__)
-
-
-@dataclass
-class TrainerConfig:
-    """Trainer-only configuration settings."""
-
-    log_interval: int = 50
-    save_interval: int = 4_000
-    eval_interval: int = 2_000
-    grad_clip: float = 1.0
-    grad_norm_threshold: float = 10.0
-    loss_nan_skip: bool = True
-    consecutive_nan_limit: int = 5
-    max_keep: int = 2
 
 
 @dataclass

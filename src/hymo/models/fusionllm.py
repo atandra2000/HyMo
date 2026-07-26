@@ -8,7 +8,6 @@ from __future__ import annotations
 
 import torch
 from torch import nn
-from torch.utils.checkpoint import checkpoint
 
 from hymo.core.config import HyMoConfig, ModelConfig
 from hymo.models.gdn import GatedDeltaNetBlock
@@ -67,13 +66,9 @@ class HyMo(nn.Module):
         )
 
     def _run_layers(self, x: torch.Tensor) -> torch.Tensor:
-        """Run the 32-layer stack, honoring per-layer gradient checkpointing."""
+        """Run the 32-layer stack."""
         for layer in self.layers:
-            use_cp = getattr(layer, "use_checkpoint", False)
-            if use_cp and self.training:
-                x = checkpoint(layer, x, use_reentrant=False)
-            else:
-                x = layer(x)
+            x = layer(x)
         return x
 
     def forward(self, tokens: torch.Tensor) -> torch.Tensor:

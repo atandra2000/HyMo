@@ -1,37 +1,43 @@
-"""Public API of :mod:`hymo.utils`."""
+"""Small utilities: seeding, dtype helpers, atomic file writes, JSONL metrics logging."""
 
 from __future__ import annotations
 
-import os
-import random
-import numpy as np
-import torch
 import json
 import logging
+import os
+import random
 import sys
-
-from collections.abc import Generator
+from collections.abc import Callable, Generator, Iterator
 from contextlib import contextmanager
-from collections.abc import Callable
-from pathlib import Path
-from collections.abc import Iterator
 from dataclasses import asdict, dataclass, field
 from datetime import datetime
+from pathlib import Path
 from typing import Any, TextIO
+
+import numpy as np
+import torch
+
 from hymo.core.types import DType
 
 __all__ = [
-    "set_seed", "seed_for_rank",
-    "BF16", "FP32", "resolve_dtype", "autocast_disabled", "bf16_forward", "fp32_master_weights",]
-
-
-
-
-
+    "BF16",
+    "CheckpointIOError",
+    "FP32",
+    "MetricsLogger",
+    "MetricsRecord",
+    "atomic_write_bytes",
+    "atomic_write_with",
+    "autocast_disabled",
+    "bf16_forward",
+    "get_logger",
+    "resolve_dtype",
+    "seed_for_rank",
+    "set_seed",
+]   # ponytail: fp32_master_weights removed (no-op context); optimizer classes own FP32 master state.
 
 
 def set_seed(seed: int) -> None:
-    """Seed Python, NumPy, and PyTorch global random number generators."""
+    """Seed Python, NumPy, and PyTorch global RNGs (CUDA included)."""
     random.seed(seed)
     os.environ["PYTHONHASHSEED"] = str(seed)
     np.random.seed(seed)
@@ -44,15 +50,7 @@ def seed_for_rank(base_seed: int, rank: int) -> int:
     """Derive a deterministic per-rank seed from a base seed and rank index."""
     return base_seed + rank
 
-"""Precision and dtype utility definitions and context managers."""
 
-
-
-
-from hymo.core.types import DType
-
-
-# Canonical aliases
 BF16: DType = torch.bfloat16
 FP32: DType = torch.float32
 
@@ -71,7 +69,7 @@ def resolve_dtype(name: str) -> DType:
 
 @contextmanager
 def autocast_disabled() -> Generator[None, None, None]:
-    """Disable autocast context temporarily."""
+    """Disable autocast for the enclosed block (CUDA only; passes through on CPU)."""
     with torch.no_grad():
         if torch.cuda.is_available():
             with torch.amp.autocast(device_type="cuda", enabled=False):
@@ -82,7 +80,7 @@ def autocast_disabled() -> Generator[None, None, None]:
 
 @contextmanager
 def bf16_forward() -> Generator[None, None, None]:
-    """Execute forward pass under bfloat16 autocast context."""
+    """Run the enclosed forward pass under bfloat16 autocast (CUDA only)."""
     if torch.cuda.is_available():
         with torch.amp.autocast(device_type="cuda", dtype=torch.bfloat16):
             yield
@@ -90,24 +88,12 @@ def bf16_forward() -> Generator[None, None, None]:
         yield
 
 
-@contextmanager
-def fp32_master_weights() -> Generator[None, None, None]:
-    """Execute context for FP32 master weight updates."""
-    yield
-
-"""Atomic file-write helpers implementing tmp -> rename semantics."""
-
-
-
-
-
-
 class CheckpointIOError(Exception):
     """Atomic-write helper failed."""
 
 
 def atomic_write_bytes(path: str | Path, data: bytes) -> None:
-    """Write bytes to path atomically using temporary files and os.replace."""
+    """Write bytes to path atomically using a tmp file plus os.replace."""
     path = Path(path)
     path.parent.mkdir(parents=True, exist_ok=True)
     tmp = path.with_suffix(path.suffix + ".tmp")
@@ -129,7 +115,7 @@ def atomic_write_bytes(path: str | Path, data: bytes) -> None:
 def atomic_write_with(
     path: str | Path, writer: Callable[[Path], None]
 ) -> None:
-    """Write data to path atomically, calling writer(tmp_path) to write."""
+    """Write to path atomically by invoking writer(tmp_path) to produce the file."""
     path = Path(path)
     path.parent.mkdir(parents=True, exist_ok=True)
     tmp = path.with_suffix(path.suffix + ".tmp")
@@ -156,9 +142,6 @@ def atomic_write_with(
             pass
         raise
 
-"""Logging utilities for project logging and structured JSONL metrics logging."""
-
-
 
 _LOGGER_NAME = "hymo"
 _FORMAT = "%(asctime)s [%(levelname)s] %(name)s: %(message)s"
@@ -166,7 +149,7 @@ _DATE_FORMAT = "%Y-%m-%dT%H:%M:%S"
 
 
 def get_logger(name: str | None = None) -> logging.Logger:
-    """Return or initialize a project Logger instance."""
+    """Return or initialize a project Logger."""
     root = logging.getLogger(_LOGGER_NAME)
     if not root.handlers:
         handler = logging.StreamHandler(sys.stderr)
@@ -199,7 +182,7 @@ class MetricsLogger:
         self._log = get_logger("metrics")
 
     def log(self, step: int, **metrics: Any) -> None:
-        """Write a metrics record JSON line for the given step."""
+        """Append a metrics record JSON line for the given step."""
         rec = MetricsRecord(step=step, metrics=metrics)
         line = json.dumps(asdict(rec), default=_json_default)
         self._fp.write(line + "\n")
@@ -251,5 +234,3 @@ def _json_default(obj: Any) -> Any:
     if hasattr(obj, "tolist"):
         return obj.tolist()
     return str(obj)
-
-

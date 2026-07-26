@@ -13,60 +13,14 @@ from hymo.core.config import TrainingConfig
 __all__ = [
     "wrap_model_with_fsdp",
     "fsdp_auto_wrap_policy",
-    "shard_nor_muon_params",
-    "RankedParamShard",
-]
+]   # ponytail: speculative NorMuon parameter-balancer removed; FSDP does the sharding.
 
 
 def fsdp_auto_wrap_policy(module: nn.Module, recurse: bool, non_blocking: bool) -> bool:
-    """FSDP auto-wrap policy function."""
+    """FSDP auto-wrap policy: wrap per-layer blocks (GDN, MLA)."""
     from hymo.models.gdn import GatedDeltaNetBlock
     from hymo.models.mla import MLABlock
     return isinstance(module, (GatedDeltaNetBlock, MLABlock))
-
-
-class RankedParamShard:
-    """The parameter partitioning shard assignments across ranks."""
-
-    __slots__ = ("rank_assignments", "rank_byte_counts")
-
-    def __init__(
-        self,
-        rank_assignments: list[list[nn.Parameter]],
-        rank_byte_counts: list[int],
-    ) -> None:
-        self.rank_assignments = rank_assignments
-        self.rank_byte_counts = rank_byte_counts
-
-    def __repr__(self) -> str:
-        n = len(self.rank_byte_counts)
-        max_bytes = max(self.rank_byte_counts)
-        avg = sum(self.rank_byte_counts) / n if n else 0
-        return (
-            f"RankedParamShard(rank_count={n}, "
-            f"max_bytes={max_bytes:,}, avg_bytes={avg:,.0f}, "
-            f"imbalance={max_bytes / avg if avg else float('nan'):.3f})"
-        )
-
-
-def shard_nor_muon_params(
-    model: nn.Module,
-    world_size: int,
-) -> RankedParamShard:
-    """NorMuon parameter shard optimizer balancer."""
-    params = [p for p in model.parameters() if p.requires_grad and p.ndim == 2]
-    
-    params.sort(key=lambda p: p.numel(), reverse=True)
-    
-    rank_assignments: list[list[nn.Parameter]] = [[] for _ in range(world_size)]
-    rank_byte_counts = [0 for _ in range(world_size)]
-    
-    for p in params:
-        min_rank = min(range(world_size), key=lambda r: rank_byte_counts[r])
-        rank_assignments[min_rank].append(p)
-        rank_byte_counts[min_rank] += p.numel() * p.element_size()
-        
-    return RankedParamShard(rank_assignments, rank_byte_counts)
 
 
 def wrap_model_with_fsdp(

@@ -9,7 +9,6 @@ from __future__ import annotations
 import torch
 from torch import nn
 
-from hymo.core.config import ModelConfig
 from hymo.core.types import DType
 
 __all__ = ["RotaryEmbedding"]
@@ -83,13 +82,4 @@ class RotaryEmbedding(nn.Module):
         return (
             f"head_dim={self.head_dim}, max_seq_len={self.max_seq_len}, "
             f"theta={self.theta}"
-        )
-
-    @classmethod
-    def from_config(cls, config: ModelConfig) -> RotaryEmbedding:
-        """Build RotaryEmbedding from ModelConfig config parameters."""
-        return cls(
-            head_dim=config.qk_rope_head_dim,
-            max_seq_len=config.max_seq_len,
-            theta=config.rope_theta,
         )

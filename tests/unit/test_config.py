@@ -96,7 +96,7 @@ class TestOptimizerConfigDefaults:
     def test_adamw_betas(self) -> None:
         assert OptimizerConfig().adamw_betas == (0.9, 0.95)
 
-    def test_fp32_master_weights_default(self) -> None:
+    def test_master_weights_dtype_default(self) -> None:
         assert OptimizerConfig().master_weights_dtype == "float32"
 
     def test_cautious_wd_default(self) -> None:

@@ -125,13 +125,6 @@ class TestRotaryEmbedding:
         with pytest.raises(ValueError):
             r.apply_rope(torch.zeros(1, 4, 1, 32), start_pos=10)
 
-    def test_from_config(self) -> None:
-        m = ModelConfig()
-        r = RotaryEmbedding.from_config(m)
-        assert r.head_dim == m.qk_rope_head_dim
-        assert r.max_seq_len == m.max_seq_len
-        assert r.theta == m.rope_theta
-
 
 class TestGatedDeltaNetBlock:
     """Verify GDN block construct and forward recurrences."""

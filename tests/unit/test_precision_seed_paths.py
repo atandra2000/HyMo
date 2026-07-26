@@ -12,11 +12,9 @@ import numpy as np
 import pytest
 import torch
 
-from hymo.core.config import RunConfig
 from hymo.utils import (
     autocast_disabled,
     bf16_forward,
-    fp32_master_weights,
     resolve_dtype,
 )
 from hymo.utils import seed_for_rank, set_seed
@@ -48,10 +46,6 @@ class TestPrecisionContexts:
 
     def test_bf16_forward_is_context_manager(self) -> None:
         with bf16_forward():
-            pass
-
-    def test_fp32_master_weights_is_context_manager(self) -> None:
-        with fp32_master_weights():
             pass
 
 

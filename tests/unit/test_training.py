@@ -16,7 +16,6 @@ from hymo.training import (
     ParameterPartition,
     build_optimizers,
     goes_to_adamw,
-    goes_to_nor_muon,
     partition_parameters,
 )
 
@@ -76,22 +75,6 @@ class TestGoesToAdamw:
         assert goes_to_adamw("layers.0.gdn.g_proj.weight", nn.Parameter(p2)) is False
         p3 = torch.empty(1280, 896)
         assert goes_to_adamw("layers.0.gdn.out_proj.weight", nn.Parameter(p3)) is False
-
-
-class TestGoesToNorMuon:
-    """Verify goes_to_nor_muon partition routes variables to NorMuon optimizer."""
-
-    def test_attn_to_nor_muon(self) -> None:
-        p = torch.empty(896, 224)
-        assert goes_to_nor_muon("layers.0.attn.attn.wq_a.weight", nn.Parameter(p)) is True
-
-    def test_moe_expert_not_to_nor_muon(self) -> None:
-        p = torch.empty(896, 2304)
-        assert goes_to_nor_muon("layers.0.moe.experts.0.w1.weight", nn.Parameter(p)) is False
-
-    def test_1d_to_nor_muon_returns_false(self) -> None:
-        p = torch.empty(896)
-        assert goes_to_nor_muon("layers.0.norm.weight", nn.Parameter(p)) is False
 
 
 class TestPartitionParameters:

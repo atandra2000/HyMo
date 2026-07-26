@@ -14,7 +14,6 @@ from hymo.training import (
     CheckpointState,
     Trainer,
     fsdp_auto_wrap_policy,
-    shard_nor_muon_params,
     train_step_result,
     wrap_model_with_fsdp,
 )
@@ -45,11 +44,6 @@ class TestFSDPPlaceholders:
         from hymo.models.gdn import GatedDeltaNetBlock
         block = GatedDeltaNetBlock(tiny_hymo_config.model, layer_idx=0)
         assert fsdp_auto_wrap_policy(block, recurse=True, non_blocking=True) is True
-
-    @pytest.mark.heavy
-    def test_shard_nor_muon_params_raises(self) -> None:
-        with pytest.raises(NotImplementedError):
-            shard_nor_muon_params(None, world_size=4)  # type: ignore[arg-type]
 
     @pytest.mark.heavy
     def test_wrap_model_with_fsdp_raises(self) -> None:

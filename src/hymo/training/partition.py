@@ -6,35 +6,9 @@ from torch import nn
 
 __all__ = [
     "goes_to_adamw",
-    "goes_to_nor_muon",
     "partition_parameters",
     "ParameterPartition",
 ]
-
-_ADAMW_NAME_PATTERNS: tuple[str, ...] = (
-    "embed.weight",
-    "head.weight",
-    "norm.weight",
-    ".gate.weight",
-    ".gate.bias",
-    ".A_log",
-    ".dt_bias",
-)
-
-_NORMUON_2D_NAME_PATTERNS: tuple[str, ...] = (
-    ".in_proj.",
-    ".b_proj.",
-    ".c_proj.",
-    ".dt_proj.",
-    ".g_proj.",
-    ".out_proj.",
-    ".wq_a.",
-    ".wq_b.",
-    ".wkv_a.",
-    ".wkv_b.",
-    ".wo.",
-    "layers.",
-)
 
 
 def goes_to_adamw(name: str, param: nn.Parameter) -> bool:
@@ -65,11 +39,6 @@ def goes_to_adamw(name: str, param: nn.Parameter) -> bool:
         return True
 
     return name.endswith("norm.weight")
-
-
-def goes_to_nor_muon(name: str, param: nn.Parameter) -> bool:
-    """Return True if parameter should use NorMuon optimizer."""
-    return not goes_to_adamw(name, param) and param.ndim >= 2
 
 
 class ParameterPartition:

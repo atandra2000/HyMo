@@ -328,39 +328,10 @@ class HyMoConfig:
     training: TrainingConfig = field(default_factory=TrainingConfig)
     run: RunConfig = field(default_factory=RunConfig)
 
-    @property
-    def effective_batch_tokens(self) -> int:
-        """Tokens per optimizer step."""
-        return self.training.per_step_tokens
-
-    @property
-    def lr_muon_over_adamw(self) -> float:
-        """Preserved LR ratio (Muon / AdamW)."""
-        return self.optimizer.muon_lr / self.optimizer.adamw_lr
-
 
 # ----------------------------------------------------------------------
 # Load / save
 # ----------------------------------------------------------------------
-
-
-def _coerce(value: Any, type_: type) -> Any:
-    """Best-effort coercion of YAML scalars to the type hint."""
-    if value is None:
-        return None
-    if type_ is bool:
-        if isinstance(value, str):
-            return value.lower() in ("true", "1", "yes", "on")
-        return bool(value)
-    if type_ is int:
-        return int(value)
-    if type_ is float:
-        return float(value)
-    if type_ is str:
-        return str(value)
-    if type_ is tuple:
-        return tuple(value) if isinstance(value, (list, tuple)) else (value,)
-    return value
 
 
 def _to_dict(obj: Any) -> Any:

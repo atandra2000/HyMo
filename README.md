@@ -24,7 +24,7 @@ The headline design choices:
 
 - **3:1 GDN-to-MLA ratio** — 24 linear-attention layers interleaved with 8 full-attention layers, so 75% of the stack is sub-quadratic.
 - **Asymmetric feed-forward** — MoE (sparse, expensive) lives only on the 8 full-attention MLA blocks; the 24 linear GDN blocks use cheap dense SwiGLU. Compute is spent where it buys the most.
-- **Custom Triton GDN kernel** — a fused 1D selective scan with chunked recurrence (`chunk_size=64`), written by hand for throughput and numerical parity with the reference scan.
+- **Custom Triton GDN kernel** — a fused 1D selective scan with chunked recurrence (`chunk_size=64`), written by hand in `src/hymo/models/gdn_triton.py` for throughput and numerical parity with the eager reference. There is no `fla`-library dependency — the only sanctioned kernel path is this hand-written Triton kernel.
 
 ---
 
@@ -56,7 +56,7 @@ Key architectural invariants:
 
 ## Features
 
-- **Custom Triton GDN kernel** — optimized 1D selective scan with fused recurrence, chunked at `chunk_size=64`; native PyTorch fallback on non-Linux platforms.
+- **Custom Triton GDN kernel** — optimized 1D selective scan with fused recurrence, chunked at `chunk_size=64` (Linux only — Triton does not ship on macOS/Windows; on those platforms the eager path in `src/hymo/models/gdn.py` is the reference and is what unit tests exercise).
 - **FSDP-2 full parameter sharding** — BF16 mixed precision, gradient clipping by global norm, NaN-step skipping with configurable tolerance.
 - **10-source data pipeline** — BPE-64k + 256-byte tokenizer, `np.memmap` zero-copy lazy loading, multi-process prefetching via `ShardWriter` / `ShardDataset`.
 - **Ablation framework** — 4 families of config derivation (GDN variants, MLA variants, MoE variants, optimizer variants) for systematic experimentation; configs are frozen dataclasses, variants derived via `dataclasses.replace`.
@@ -93,14 +93,18 @@ config = load_config("configs/hymo_750m.yaml")
 model = build_hymo(config)
 
 x = torch.randint(0, config.model.vocab_size, (2, 128))
-logits, aux_losses = model(x)
+logits = model(x)  # HyMo.forward returns next-token logits only
 print(logits.shape)  # (2, 128, 64256)
+
+# For MTP (multi-token prediction) auxiliary heads, the trainer uses
+# model.forward_with_hidden(tokens) which returns (logits, hidden).
+# See src/hymo/training/trainer.py::train_step for the MTP loss wiring.
 ```
 
 Run the test suite and gates:
 
 ```bash
-pytest tests/ -v                # ~1 min on CPU; full model tests skipped
+pytest tests/ -v                # ~1 min on CPU; heavy tests skipped (280 passed / 36 skipped; 316 collected as of 2026-08-04)
 pytest tests/ --run-heavy       # includes full 1.86B model construction
 mypy src/hymo                   # type gate
 ruff check src/hymo             # lint gate
@@ -173,7 +177,7 @@ The architecture, training, data, evaluation, and ablation pipelines are fully i
 
 ## License
 
-Apache 2.0. See [LICENSE](LICENSE).
+Apache 2.0.
 
 ---
 

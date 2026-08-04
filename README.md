@@ -16,6 +16,18 @@
 
 ---
 
+## Documentation
+
+The full corpus lives under [`docs/`](docs/README.md) — reading orders, the
+model walkthrough, mechanism deep-dives, the design doc, config/API
+references, and the training pipeline. Quick links:
+
+- [`docs/guides/quickstart.md`](docs/guides/quickstart.md) — install, first forward pass, tests and gates
+- [`docs/concepts/model-architecture.md`](docs/concepts/model-architecture.md) — the code walkthrough
+- [`docs/concepts/design.md`](docs/concepts/design.md) — the v1.0 architecture & design document
+- [`docs/references/config.md`](docs/references/config.md) — the typed-config reference
+- [`docs/training.md`](docs/training.md) — the training pipeline
+
 ## Why HyMo
 
 Transformer attention scales quadratically with sequence length — the dominant cost of pretraining at scale. **HyMo is a hybrid**: it processes the bulk of the sequence through *linear-complexity* recurrence (Gated Delta Net) and reserves sparse *full-attention* anchors for genuine long-range reasoning. The result is a model that trains and infers far cheaper than an all-attention transformer of equal quality, while keeping the expressivity where it matters.
@@ -49,41 +61,31 @@ Key architectural invariants:
 - **MQA-4** — MLA compresses to 4 KV groups for efficient inference.
 - **FP32 master weights** — full numerical stability; optimizer state held in float32.
 - **NorMuon / AdamW dual optimizer** — NorMuon drives attention + GDN 2D matrices; AdamW handles embeddings, norms, gates, and MoE experts. Cautious weight decay enabled.
-- **μP initialization** — maximal update parameterization for stable training at scale.
+- **Initialization** — PyTorch module defaults plus the inline MoE-gate init (`bias=0`, `std=0.006`) and the GDN recurrence init (`A_log`, `dt_bias`, `D`). The designed μP init was never wired into `build_hymo` and was removed in the 2026-08-04 cleanup (see [`docs/concepts/optimization.md`](docs/concepts/optimization.md)).
 - **Logit softcap (15.0)** — bounds logits for training stability.
 
 ---
 
 ## Features
 
-- **Custom Triton GDN kernel** — optimized 1D selective scan with fused recurrence, chunked at `chunk_size=64` (Linux only — Triton does not ship on macOS/Windows; on those platforms the eager path in `src/hymo/models/gdn.py` is the reference and is what unit tests exercise).
+- **Custom Triton GDN kernel** — a hand-written fused 1D selective scan in `src/hymo/models/gdn_triton.py` (serial time loop, FP32 accumulation; the parallel-chunk algorithm from the GDN paper remains the design intent). Linux only — Triton does not ship on macOS/Windows; on those platforms the eager path in `src/hymo/models/gdn.py` is the reference and is what unit tests exercise.
 - **FSDP-2 full parameter sharding** — BF16 mixed precision, gradient clipping by global norm, NaN-step skipping with configurable tolerance.
-- **10-source data pipeline** — BPE-64k + 256-byte tokenizer, `np.memmap` zero-copy lazy loading, multi-process prefetching via `ShardWriter` / `ShardDataset`.
-- **Ablation framework** — 4 families of config derivation (GDN variants, MLA variants, MoE variants, optimizer variants) for systematic experimentation; configs are frozen dataclasses, variants derived via `dataclasses.replace`.
+- **10-source data pipeline** — BPE-64k + 256-byte tokenizer and the held-out FineWeb-Edu validation-set builder remain in-repo; the 10 streaming loaders and shard writer moved to the workspace `LLM/shared_data/` package in the 2026-08-04 cleanup (the trainer consumes a raw `data_iter`).
+- **Ablation framework** — 4 families of config derivation (GDN variants, MLA variants, MoE variants, optimizer variants) via `dataclasses.replace` on the frozen configs; the in-repo `ablations/` package was removed in the 2026-08-04 cleanup — the derivation helper `derive_config` lives in `hymo.core.config`.
 - **Cool-by-design test suite** — the full 1.86B model is never built in default tests; a ~760K-param surrogate is used instead. Heavy tests (full model construction) are opt-in via `--run-heavy`. Default `pytest` finishes in ~1 minute on an M1 Air.
 - **DCP checkpointing** — distributed checkpoint save/load with resume-from-arbitrary-step support.
 
 ---
 
-## Installation
+## Installation and Quick Start
 
-Requires Python 3.11+ and [uv](https://github.com/astral-sh/uv).
+Install, run the first forward pass, and run the test suite / gates in
+[`docs/guides/quickstart.md`](docs/guides/quickstart.md). The 30-second
+version:
 
 ```bash
-git clone https://github.com/atandra-bharati/hymo.git
-cd hymo
 uv sync --all-extras
 ```
-
-Core dependencies: PyTorch ≥ 2.5, NumPy, PyYAML, HuggingFace `tokenizers` + `datasets`.
-
-Optional extras:
-- `train` — Triton (Linux), `lm-eval`, `wandb`
-- `dev` — `pytest`, `mypy`, `ruff`
-
----
-
-## Quick Start
 
 ```python
 import torch
@@ -95,16 +97,10 @@ model = build_hymo(config)
 x = torch.randint(0, config.model.vocab_size, (2, 128))
 logits = model(x)  # HyMo.forward returns next-token logits only
 print(logits.shape)  # (2, 128, 64256)
-
-# For MTP (multi-token prediction) auxiliary heads, the trainer uses
-# model.forward_with_hidden(tokens) which returns (logits, hidden).
-# See src/hymo/training/trainer.py::train_step for the MTP loss wiring.
 ```
 
-Run the test suite and gates:
-
 ```bash
-pytest tests/ -v                # ~1 min on CPU; heavy tests skipped (280 passed / 36 skipped; 316 collected as of 2026-08-04)
+pytest tests/ -v                # ~1 min on CPU; heavy tests skipped (191 passed / 35 skipped as of 2026-08-05)
 pytest tests/ --run-heavy       # includes full 1.86B model construction
 mypy src/hymo                   # type gate
 ruff check src/hymo             # lint gate
@@ -124,7 +120,10 @@ All hyperparameters live in YAML configs under `configs/`. The primary config is
 | `training` | `TrainingConfig` | Micro-batch 4, grad accum 8, FSDP BF16, eval every 2k steps |
 | `run` | `RunConfig` | Name + output directory |
 
-Derive config variants via `hymo.core.config.derive_config()` (e.g. `dataclasses.replace` on sub-configs).
+Every field, validation rule, and the derivation helper are documented in
+[`docs/references/config.md`](docs/references/config.md). Derive config
+variants via `hymo.core.config.derive_config()` (e.g.
+`dataclasses.replace` on sub-configs).
 
 ---
 

@@ -76,19 +76,19 @@ Resume from an arbitrary step via `trainer.load("checkpoints/pretrain/step_N")`.
 ## Skill 5: Wire the data pipeline
 
 HyMo uses its own BPE-64k + 256-byte tokenizer (vocab 64,256 — see
-`src/hymo/data/tokenizer.py::ExtendedTokenizer`). Source loaders in
-`src/hymo/data/sources.py` provide 10 streams: `load_fineweb_edu`,
-`load_fineweb`, `load_stack_python`, `load_stack_java`, `load_stack_cpp`,
-`load_slimpajama`, `load_dclm_baseline`, `load_dolma_wiki`,
-`load_dolma_books`, `load_cosmopedia`.
+`src/hymo/data/tokenizer.py::ExtendedTokenizer`).
 
-> **Note:** `data/prepare_data.py` is a **pending Roadmap task** (deferred to
-> v1.1). For now, the `ShardWriter` in `src/hymo/data/sharding.py` consumes
-> the source loaders directly; the validation binary is built by
-> `src/hymo/data/prepare_validation.py`.
+> **Note (2026-08-04 cleanup):** the 10 streaming source loaders
+> (`sources.py`), the shard writer (`sharding.py`), and `data_config.py`
+> were removed from the repo — they were consumed only by tests. The
+> trainer consumes a raw `data_iter`; the data-preparation pipeline lives
+> in the workspace `LLM/shared_data/` package. The validation binary is
+> built by `src/hymo/data/prepare_validation.py` and read by
+> `compute_validation_loss` in `src/hymo/training/validation.py`.
 
-After changing the mixture or tokenizer, rebuild shards (via
-`ShardWriter`) and bump the manifest version before starting a new run.
+After changing the mixture or tokenizer, rebuild shards in
+`LLM/shared_data/` and bump the manifest version before starting a new
+run.
 
 ## Skill 6: Debug NaN / OOM during training
 

@@ -1,26 +1,421 @@
-# HyMo Training Pipeline — Code Walkthrough
+# HyMo — Training
 
-> **Prerequisite reading:** [`learning_docs/1_Model_Architecture.md`](1_Model_Architecture.md) for the
-> model stack, [`learning_docs/4_Optimizations.md`](4_Optimizations.md) for the kernel + flags,
-> [`learning_docs/6_Config_System.md`](6_Config_System.md) for `TrainingConfig` / `OptimizerConfig` /
-> `SchedulerConfig`.
->
-> **Files covered:**
-> - `src/hymo/training/partition.py` — `ParameterPartition`, `partition_parameters`, `goes_to_adamw`
-> - `src/hymo/training/optimizer.py` — `NorMuon`, `CautiousAdamW`, `Optimizers`, `build_optimizers`, `_newton_schulz_orthogonalize`
-> - `src/hymo/training/scheduler.py` — `JointWSDScheduler` (3 decay kinds)
-> - `src/hymo/training/fsdp.py` — `wrap_model_with_fsdp`, `fsdp_auto_wrap_policy`
-> - `src/hymo/training/trainer.py` — `Trainer`, `train_step_result`, training loop
-> - `src/hymo/training/checkpoint.py` — DCP-based `save_checkpoint`, `load_checkpoint`
-> - `src/hymo/training/validation.py` — `compute_validation_loss`
+> The training pipeline end to end: data (tokenizer, validation set, 40× params-in-tokens
+> mixture), the trainer loop (dual optimizer, WSD scheduler, FSDP-2, MTP wiring, EMA gate-bias,
+> NaN-skip), checkpointing (DCP), and in-training validation. The eval/ablation scope note below
+> records what was removed in the 2026-08-04 cleanup.
 
-> **No `hymo.training.train` module.** The trainer is a class
-> (`Trainer`); you wire it from your driver script. See
-> [`../SKILLS.md`](../SKILLS.md) §Skill 4.
+## Evaluation scope note (2026-08-04 cleanup)
+
+The `src/hymo/eval/` package (`harness.py`, `baselines.py`, `comparison.py`,
+`run_all.py`) and `src/hymo/ablations/` were **removed in the cleanup** —
+they were consumed only by tests; the production path
+(`load_config` → `build_hymo` → `Trainer`) never imported them. The 6-task
+eval suite (HellaSwag, ARC, MMLU, GSM8K, HumanEval, FineWeb-Edu PPL) and the
+4 ablation families (GDN/MLA/MoE/optimizer config derivation via
+`derive_config`) remain **design intent for Phase 4**, recorded in
+`concepts/design.md` §8/§16 — they were not deleted because they were
+unimplemented; they were deferred with the rest of the Phase 4 workflow.
+
+The live evaluation surface in-repo:
+
+- `src/hymo/training/validation.py` — `compute_validation_loss`,
+  `get_val_batch`, `ValMetrics` (used by `Trainer` at `eval_interval`).
+- `src/hymo/data/prepare_validation.py` — builds the held-out FineWeb-Edu
+  validation binary.
+- `src/hymo/core/config_validation.py` — `validate_full_config` (the
+  cross-field checks the ablation builder used).
+
+The in-training validation loop (`Trainer.evaluate`) is unchanged and
+covered in the Training Pipeline section below.
+
+## Data Pipeline
+
+
+> **No `data/prepare_data.py`** — that path was referenced in earlier
+> docs as a placeholder. The shipped data pipeline is constructed
+> from the modules above; there is no monolithic `prepare_data.py`
+> CLI for the v1.0 primary run.
 
 ---
 
-## Table of Contents
+### Table of Contents
+
+1. [Pipeline at a glance](#1-pipeline-at-a-glance)
+2. [Data config (`data_config.py`)](#2-data-config-data_configpy)
+3. [Source loaders (`sources.py`)](#3-source-loaders-sourcespy)
+4. [Tokenizer (`tokenizer.py`)](#4-tokenizer-tokenizerpy)
+5. [Sharding (`sharding.py`)](#5-sharding-shardingpy)
+6. [Validation set (`prepare_validation.py`)](#6-validation-set-prepare_validationpy)
+7. [End-to-end flow](#7-end-to-end-flow)
+8. [Interview Q&A](#8-interview-qa)
+
+---
+
+### Pipeline at a glance
+
+```
+   ┌─────────────────────────────┐
+   │   10 HF source loaders      │   sources.py
+   │   (streaming, filtered)     │   ─────────────
+   │   FineWeb-Edu, FineWeb,     │   load_fineweb_edu(),
+   │   Stack v2 (py/java/cpp),   │   load_stack_python(),
+   │   SlimPajama, DCLM,         │   load_slimpajama(), …
+   │   Dolma wiki+books,         │
+   │   Cosmopedia                │
+   └────────────┬────────────────┘
+                │  stream of {text: ...}
+                ▼
+   ┌─────────────────────────────┐
+   │   ExtendedTokenizer         │   tokenizer.py
+   │   (BPE-64k + 256 byte       │   ─────────────
+   │   fallback tokens)          │   encode(text) → list[int]
+   └────────────┬────────────────┘
+                │  stream of token IDs (uint32)
+                ▼
+   ┌─────────────────────────────┐
+   │   ShardWriter               │   sharding.py
+   │   (50M-token flat shards)   │   ─────────────
+   │                             │   write_batched(token_stream)
+   │                             │   → shard_00000.bin, …
+   └────────────┬────────────────┘
+                │  uint32 binary files
+                ▼
+   ┌─────────────────────────────┐
+   │   ShardDataset + DataLoaderBuilder  │
+   │   (zero-copy memmap,        │
+   │    sliding 4k windows,      │
+   │    multi-worker prefetch)   │
+   └────────────┬────────────────┘
+                │  (tokens, targets) batches
+                ▼
+          ┌──────────┐
+          │ Trainer  │
+          └──────────┘
+```
+
+For **validation**, a parallel `build_val_set()` produces
+`data/tokens/val.bin` — a 450 M-token FineWeb-Edu held-out shard
+read by `compute_validation_loss`.
+
+---
+
+### In-repo pipeline modules — scope note (2026-08-04)
+
+The in-repo data-pipeline modules described in the original expansion
+(`data_config.py` — `DataConfig`/`SourceSpec`/`load_data_config`, and
+`sources.py` — the 10 streaming loaders) were **removed in the cleanup**.
+The trainer consumes a raw `data_iter` (`Iterable[tuple[Tensor, Tensor]]`)
+and never imports them; the actual data-preparation pipeline lives in the
+workspace `LLM/shared_data/` package (see its `documentation/`). Only the
+tokenizer (§4) and the validation-set builder (§6) remain in-repo.
+
+### Tokenizer (`tokenizer.py`)
+
+A BPE-64k tokenizer with **byte-level fallback** for OOV.
+
+### 4.1 Vocab layout
+
+```
+ ┌─────────────────────────────────┬────────────────────────────┐
+ │  IDs 0..63,999                   │  IDs 64,000..64,255         │
+ │  ──────                          │  ──────                     │
+ │  BPE tokens learned from text    │  256 byte-level tokens     │
+ │  + 5 special tokens:             │  <0x00>, <0x01>, ...,      │
+ │    <unk>=0, <s>=1, </s>=2,       │  <0xFF>                    │
+ │    <pad>=3, <mask>=4             │  (one per byte value)      │
+ └─────────────────────────────────┴────────────────────────────┘
+                                          64,256 = vocab_size
+```
+
+Constants in `tokenizer.py`:
+
+```python
+BYTE_VOCAB_SIZE = 256
+_BYTE_TOKENS    = [f"<0x{b:02X}>" for b in range(256)]
+_BASE_VOCAB_SIZE = 64_000
+_TOTAL_VOCAB_SIZE = _BASE_VOCAB_SIZE + BYTE_VOCAB_SIZE  # 64_256
+```
+
+The 5 special tokens (`<unk>`, `<s>`, `</s>`, `<pad>`, `<mask>`)
+are added after training and take 5 of the 64 k BPE slots; the
+rest are content tokens.
+
+### 4.2 `train_bpe_tokenizer(texts, *, vocab_size=64_000, output_path=...)`
+
+Trains a BPE tokenizer from `texts` using HuggingFace
+`tokenizers`:
+
+```python
+def train_bpe_tokenizer(texts, *, vocab_size=_BASE_VOCAB_SIZE,
+                       output_path="data/tokens/byte_bpe_vocab.json"):
+    tokenizer = Tokenizer(BPE(unk_token="<unk>"))
+    tokenizer.pre_tokenizer = pre_tokenizers.ByteLevel(add_prefix_space=True)
+    trainer = BpeTrainer(
+        vocab_size=vocab_size,
+        special_tokens=["<unk>", "<s>", "</s>", "<pad>", "<mask>"],
+        initial_alphabet=pre_tokenizers.ByteLevel.alphabet(),
+    )
+    tokenizer.train_from_iterator(texts, trainer=trainer)
+    tokenizer.save(str(output_path))
+    return tokenizer
+```
+
+The `ByteLevel` pre-tokenizer splits text on Unicode byte boundaries
+before BPE sees it — this is what makes BPE deterministic across
+spaces, tabs, etc. (the GPT-2 trick). `add_prefix_space=True`
+matches how GPT-2's pretokenizer handles leading spaces.
+
+### 4.3 `_byte_fallback_encode(base_tokenizer, text) → (ids, tokens)`
+
+Walk the BPE encoding; for any `<unk>`, fall back to 1–4 byte-level
+tokens:
+
+```python
+def _byte_fallback_encode(base_tokenizer, text):
+    encoding = base_tokenizer.encode(text)
+    ids, tokens = [], []
+    for token_id, token_str in zip(encoding.ids, encoding.tokens):
+        if token_id == base_tokenizer.token_to_id("<unk>"):
+            for b in text.encode("utf-8"):
+                byte_token = _BYTE_TOKENS[b]
+                byte_id = _BASE_VOCAB_SIZE + b
+                ids.append(byte_id)
+                tokens.append(byte_token)
+        else:
+            ids.append(token_id)
+            tokens.append(token_str)
+    return ids, tokens
+```
+
+This guarantees **every** UTF-8 string is losslessly encodable as a
+sequence of token IDs in `[0, 64_256)`. The model can never emit an
+"OOV" output. HyMo uses ID 0 (`<unk>`) rarely in practice — BPE
+training produces 64 k content tokens that cover English + code
++ multilingual text.
+
+### 4.4 `ExtendedTokenizer`
+
+The user-facing wrapper:
+
+```python
+class ExtendedTokenizer:
+    """BPE-64k tokenizer with byte-level fallback for OOV tokens (IDs 64,000-64,255)."""
+
+    def __init__(self, path):
+        self.path = Path(path)
+        self._base = None
+
+    def load(self):
+        base = Tokenizer.from_file(str(self.path))
+        base.add_special_tokens([f"<{s}>" for s in ("unk","s","/s","pad","mask")])
+        base.add_tokens([f"<0x{b:02X}>" for b in range(256)])
+        self._base = base
+        return self
+
+    def encode(self, text) -> list[int]:
+        if self._base is None:
+            self.load()
+        ids, _ = _byte_fallback_encode(self._base, text)
+        return ids
+
+    def decode(self, ids) -> str:
+        if self._base is None:
+            self.load()
+        chunks = []
+        for tid in ids:
+            if tid >= _BASE_VOCAB_SIZE:
+                byte_val = tid - _BASE_VOCAB_SIZE
+                if 0 <= byte_val < 256:
+                    chunks.append(bytes([byte_val]).decode("utf-8", errors="replace"))
+            else:
+                s = self._base.id_to_token(tid)
+                if s is not None:
+                    chunks.append(s)
+        return "".join(chunks).replace("</s>","").replace("<s>","")
+
+    @property
+    def vocab_size(self):
+        return _TOTAL_VOCAB_SIZE         # 64_256
+    @property
+    def eos_token_id(self):
+        return 0                          # <unk>, by convention
+    @property
+    def pad_token_id(self):
+        return 2                          # </s>, by convention
+```
+
+Properties (`vocab_size`, `eos_token_id`, `pad_token_id`) make the
+class compatible with HF `tokenizer` API expectations.
+
+(Note: `eos_token_id=0` is `<unk>` in this scheme — slightly
+unconventional. The model is fine to use 0 as EOS; the tokenizer
+falls back gracefully if it sees `<unk>` during decoding. Don't
+confuse this with the auto-tokens used in `models/hymo/...` — the
+model doesn't have an explicit EOS in the architecture; it's a
+training-side convention.)
+
+---
+
+### Sharding — scope note (2026-08-04)
+
+The in-repo sharding modules (`ShardWriter`, `ShardDataset`,
+`DataLoaderBuilder` in `sharding.py`) were **removed in the cleanup** —
+they were consumed only by tests and never by the trainer. Shard
+production (50M-token uint32 shards + `manifest.json`) is handled by the
+workspace `LLM/shared_data/` pipeline; the trainer's `data_iter` is
+expected to yield `(tokens, targets)` windows already assembled by the
+caller's loader.
+
+### Validation set (`prepare_validation.py`)
+
+A separate one-shot CLI for building `data/tokens/val.bin`:
+
+```python
+def build_val_set(
+    target_tokens: int = 450_000_000,
+    seed: int = 42,
+    tokenizer_path: str | Path = "data/tokens/byte_bpe_vocab.json",
+    output_path: str | Path = "data/tokens/val.bin",
+) -> None:
+```
+
+Pipeline:
+
+1. Load the `ExtendedTokenizer`.
+2. Stream `fineweb-edu/sample-10BT/train`.
+3. `ds.shard(num_shards=20, index=0)` — take the first 5% as the
+   **held-out** split (this is the v1.0 convention; the other 19
+   shards are training data).
+4. Tokenize each row and append to the running token list.
+5. Stop at `target_tokens` (= 450 M default; the v1.0 value).
+6. Save as a flat `np.uint32` binary file at `output_path`.
+
+The result is consumed by `compute_validation_loss` in the
+training pipeline (see `training.md` §validation).
+
+---
+
+### End-to-end flow
+
+A typical sequence at v1.0:
+
+1. **Mix config:** edit `configs/hymo_mixture.yaml` if needed
+   (weights for the 10 sources).
+2. **Tokenize shard:** for each `SourceSpec`, call the corresponding
+   `load_*` to stream documents, run them through `ExtendedTokenizer`
+   in batches, accumulate tokens until `shard_size_tokens = 50 M`,
+   write a shard via `ShardWriter.write_batched`.
+3. **Validate val.bin exists:** `python -m
+   hymo.data.prepare_validation` builds it.
+4. **Wire the trainer:** `ShardDataset(shards_dir=...)` →
+   `DataLoaderBuilder(dataset, training_config).build()` →
+   pass the loader to `Trainer.train(data_iter)` (see
+   `training.md` §6.3).
+5. **Run:** the dataloader serves `(tokens, targets)` windows;
+   the trainer consumes them in `train_step`.
+
+The 30 B-token run takes ~600 shards at 50 M each. With 4 A100
+ranks and `num_workers=8` per rank, the loader reads ~16 KB per
+`__getitem__` from memmap and the GPU never idles.
+
+---
+
+### Interview Q&A
+
+**Q1. Why BPE-64k + 256 byte-fallback = 64,256 vocab?**
+
+> A: BPE-64k is the standard for English + code + multilingual
+> training. The 256 byte tokens (IDs 64,000..64,255) cover every
+> UTF-8 byte; the model can losslessly encode any input. Without
+> byte-fallback, an OOV would map to `<unk>` and lose information.
+
+**Q2. Why `np.memmap` instead of loading all shards into RAM?**
+
+> A: 30 B tokens × 4 bytes/token = 120 GB. RAM is typically
+> 100 GB on a single-host dev machine and 1+ TB on a training
+> pod, but cheap dev machines don't have it. `np.memmap` lets
+> the OS page in only the `max_seq_len + 1` token chunk we
+> actually need (`~16 KB` at `max_seq_len=4096`) and discard it
+> immediately. The cost is per-`__getitem__` page faults, which
+> is fast enough that the data loader keeps up with A100
+> consumption.
+
+**Q3. Why fixed-size shards with zero-padding instead of variable-size?**
+
+> A: Fixed shard size makes `np.memmap` reads trivial (every
+> shard is the same length). Variable-size would require a
+> length table per shard or a global index; both add complexity
+> without throughput benefit. The zero-pad adds ~200 bytes to
+> the last shard; the alternative (a small trailing shard) would
+> require special-casing in `_locate`.
+
+**Q4. Why `replacement=True` on the `RandomSampler`?**
+
+> A: It avoids `num_samples > len(dataset)` errors when the
+> budget per epoch is larger than the dataset. With
+> `replacement=True`, the same `(tokens, targets)` window can
+> be sampled more than once across an epoch — fine for
+> training, where the model sees the same data many times
+> anyway.
+
+**Q5. Why does `ShardDataset.__getitem__` wrap across shards?**
+
+> A: Without wrap-around, an example that lands at offset
+> `(len(shard) - 10)` to `(len(shard) + 4086)` would have to be
+> silently truncated to `max_seq_len` and the model would train
+> on a partial window. Wrap-around reads the missing 10 tokens
+> from the next shard; the model always gets a full
+> `max_seq_len + 1` window.
+
+**Q6. Why is the validation binary built from a `shard(index=0)` of
+FineWeb-Edu rather than a held-out dataset?**
+
+> A: FineWeb-Edu is the **only** dataset HyMo trains on that's
+> clean enough to be a held-out set. The first 5% (shard 0 of 20)
+> is reserved at training-corpus build time; the other 19 shards
+> go into training. This guarantees the validation set has zero
+> overlap with training.
+
+**Q7. Why does `ShardWriter.write_batched` not preserve document
+boundaries across shards?**
+
+> A: It does preserve them *within* a shard (one document flows
+> into the next), but the shard boundary is wherever the 50 M
+> token count falls. There's no document alignment at the
+> boundary because byte-packed token streams are inherently
+> position-based; sampling a 4 k-token window straddling the
+> boundary is fine because the model treats the stream as
+> position-based anyway (positions are reset per-rank by FSDP,
+> not per-document).
+
+---
+
+### Cross-links
+
+- Walkthrough: `training.md` (trainer
+  consumes the `DataLoader`), `concepts/model-architecture.md`
+  §2 (model config), `training.md`
+  §6.1 (the validation binary is read by `compute_validation_loss`).
+- Concepts: `concepts/../training.md` (BPE / byte
+  fallback derivation, 40× params-in-tokens rule).
+- Tests: `tests/unit/test_data.py` (tokenizer round-trip, shard
+  round-trip, dataset slicing).
+- Config: `src/hymo/data/data_config.py` (`SourceSpec`,
+  `ShardingConfig`, etc.); `configs/hymo_mixture.yaml` (the
+  mixture file).
+
+
+## Training Pipeline
+
+
+> **No `hymo.training.train` module.** The trainer is a class
+> (`Trainer`); you wire it from your driver script. See
+> [`../../SKILLS.md`(../SKILLS.md) §Skill 4.
+
+---
+
+### Table of Contents
 
 1. [Training pipeline at a glance](#1-training-pipeline-at-a-glance)
 2. [Parameter partitioning (`partition.py`)](#2-parameter-partitioning-partitionpy)
@@ -35,7 +430,7 @@
 
 ---
 
-## 1. Training pipeline at a glance
+### Training pipeline at a glance
 
 ```
                     ┌──────────────────────────────────────────────┐
@@ -84,9 +479,9 @@ step (NorMuon + AdamW), EMA gate-bias update, scheduler step.
 
 ---
 
-## 2. Parameter partitioning (`partition.py`)
+### Parameter partitioning (`partition.py`)
 
-### 2.1 The rule — `goes_to_adamw(name, param)` (line 15)
+### 2.1 The rule — `goes_to_adamw(name, param)`
 
 A parameter goes to **AdamW** if and only if any of these hold:
 
@@ -180,13 +575,13 @@ The intuition:
 
 ---
 
-## 3. Dual optimizer: NorMuon + CautiousAdamW (`optimizer.py`)
+### Dual optimizer: NorMuon + CautiousAdamW (`optimizer.py`)
 
 The two optimizers live in one file because they share the
 `Optimizer` base, the cautious-WD mechanic, and the FP32-master-weight
 pattern.
 
-### 3.1 `_newton_schulz_orthogonalize(g, iterations=5)` (line 19)
+### 3.1 `_newton_schulz_orthogonalize(g, iterations=5)`
 
 Newton–Schulz iteration to approximate the matrix sign function:
 
@@ -213,7 +608,7 @@ The `_norm < 1e-12` early-return handles the "vanishing gradient"
 edge case (returns the zero gradient unchanged; the optimizer will
 then see a no-op update).
 
-### 3.2 `NorMuon` (line 32)
+### 3.2 `NorMuon`
 
 `torch.optim.Optimizer` subclass with constructor:
 
@@ -236,7 +631,7 @@ All defaults match `OptimizerConfig` defaults. The
 `ns_iterations=5` is the Newton–Schulz iteration count from
 `goes_to_adamw` above.
 
-The `step()` method (line 62) is roughly:
+The `step()` method is roughly:
 
 1. For each param group, for each parameter:
    1. Pull `g = param.grad` (already accumulated across
@@ -261,7 +656,7 @@ removes the sign-disagreement problem where decoupled WD pulls
 parameters in a direction the gradient is pushing against, undoing
 the actual update.
 
-### 3.3 `CautiousAdamW` (line 111)
+### 3.3 `CautiousAdamW`
 
 A second `torch.optim.Optimizer` subclass that does the standard
 AdamW update (m, v, bias correction) with the same cautious mask
@@ -282,7 +677,7 @@ class CautiousAdamW(Optimizer):
 override to `embed_weight_decay = 0.1` (a separate param-group
 distinction in `build_optimizers` below).
 
-### 3.4 `Optimizers(nor_muon, adamw)` — the partition holder (line 188)
+### 3.4 `Optimizers(nor_muon, adamw)` — the partition holder
 
 ```python
 class Optimizers:
@@ -296,7 +691,7 @@ class Optimizers:
 parameters (e.g. a tiny surrogate in tests). `adamw` is always
 present.
 
-### 3.5 `build_optimizers(model, config)` (line 209)
+### 3.5 `build_optimizers(model, config)`
 
 ```python
 def build_optimizers(model, config) -> Optimizers: ...
@@ -341,7 +736,7 @@ benefit is the primary motivation.
 
 ---
 
-## 4. Joint WSD scheduler (`scheduler.py`)
+### Joint WSD scheduler (`scheduler.py`)
 
 ### 4.1 The shape — `JointWSDScheduler`
 
@@ -400,7 +795,7 @@ optimizer sees a 0 LR for the first micro-batch).
 
 ### 4.3 Three decay shapes
 
-`_decay_factor(progress, kind)` (line 67) is a `@staticmethod`:
+`_decay_factor(progress, kind)` is a `@staticmethod`:
 
 ```python
 @staticmethod
@@ -446,15 +841,15 @@ before the decay. Two practical wins:
 2. **Ablation comparability**: the same `warmup_frac` /
    `stable_frac` / `decay_frac` fractions apply to every
    7.5 B-token ablation run (see
-   [`learning_docs/5_Evaluation_and_Ablations.md`](5_Evaluation_and_Ablations.md)
+   [`training.md`(training.md)
    §3.2). With cosine, the peak LR would shift to match run
    length — apples-to-oranges comparison.
 
-See [`docs/concepts/08-wsd-scheduler.md`](../docs/concepts/08-wsd-scheduler.md) for the math derivation.
+See [`concepts/optimization.md`(concepts/optimization.md) for the math derivation.
 
 ---
 
-## 5. FSDP-2 wrapping (`fsdp.py`)
+### FSDP-2 wrapping (`fsdp.py`)
 
 ### 5.1 The surface
 
@@ -507,13 +902,13 @@ unwrapped. With FSDP available:
 `world_size` defaults to `None`, which then uses PyTorch's
 distributed init to query it.
 
-See [`docs/concepts/09-fsdp2.md`](../docs/concepts/09-fsdp2.md) for the ZeRO-3 vs FSDP-2 internals.
+See [`concepts/optimization.md`(concepts/optimization.md) for the ZeRO-3 vs FSDP-2 internals.
 
 ---
 
-## 6. The training loop (`trainer.py`)
+### The training loop (`trainer.py`)
 
-### 6.1 `Trainer.__init__(config, model)` (line 48)
+### 6.1 `Trainer.__init__(config, model)`
 
 ```python
 def __init__(self, config: HyMoConfig, model: HyMo) -> None:
@@ -530,9 +925,10 @@ Construction order matters:
 
 1. **Store config + model.**
 2. **Thread optimization flags** — walks `model.modules()` once
-   and sets `use_triton`, `use_compile`, `use_mixed_precision`,
-   `use_cuda_graphs` on the appropriate blocks. (See
-   [`learning_docs/4_Optimizations.md`](4_Optimizations.md) §2.1.)
+   and sets `use_triton`, `use_compile`, `use_mixed_precision` on the
+   appropriate blocks. (The `use_cuda_graphs` attribute was removed in
+   the 2026-08-04 cleanup — no CUDA-graph capture path ever shipped.)
+   See [concepts/optimization.md](concepts/optimization.md) §2.1.
 3. **Initialize W&B** — but only on rank 0 (or `WANDB_MODE` not
    disabled):
    ```python
@@ -549,7 +945,7 @@ Construction order matters:
    `token_count = 0`, `best_loss = inf`).
 7. **Set `_has_mtp`** from `config.model.mtp_depth > 0`.
 
-### 6.2 `train_step(tokens, targets)` (line 114)
+### 6.2 `train_step(tokens, targets)`
 
 The full forward + backward + (sometimes) optimizer step:
 
@@ -648,7 +1044,7 @@ Walk through this:
 | Step counter | 196 | `self.step += 1`. |
 | Token count | 198 | Tracked for "tokens seen so far" reporting. |
 
-### 6.3 `train(data_iter, max_steps=None)` (line 252)
+### 6.3 `train(data_iter, max_steps=None)`
 
 The driver-loop wrapper:
 
@@ -682,7 +1078,7 @@ The cadence knobs are all in `TrainingConfig`:
 - `save_interval = 4_000`
 - `max_keep = 2` (old checkpoints pruned)
 
-### 6.4 `evaluate(val_bin_path=None)` (line 297)
+### 6.4 `evaluate(val_bin_path=None)`
 
 ```python
 def evaluate(self, val_bin_path=None) -> dict[str, float]:
@@ -707,7 +1103,7 @@ def evaluate(self, val_bin_path=None) -> dict[str, float]:
 enough for a noise-level signal during training; the full 32-batch
 validation is reserved for the 6-eval suite run.
 
-### 6.5 `_update_moe_gate_biases` (line 329)
+### 6.5 `_update_moe_gate_biases`
 
 ```python
 def _update_moe_gate_biases(self) -> None:
@@ -722,12 +1118,12 @@ A single walk over model modules, calling `update_gate_bias()` on
 each `DeepSeekMoE` (8 of them in the production model — one per
 MLA layer). The actual EMA logic is in
 [`src/hymo/models/moe.py`](https://github.com) — see
-[`learning_docs/4_Optimizations.md`](4_Optimizations.md) §5.3 and
-[`docs/concepts/03-mixture-of-experts.md`](../docs/concepts/03-mixture-of-experts.md).
+[`concepts/optimization.md`(concepts/optimization.md) §5.3 and
+[`concepts/gdn-and-mla.md`(concepts/gdn-and-mla.md).
 
 ### 6.6 `save(tag=None)`, `load(path)` — DCP checkpointing
 
-`save(tag=None)` (line 210):
+`save(tag=None)`:
 
 ```python
 def save(self, tag=None) -> Path:
@@ -741,7 +1137,7 @@ def save(self, tag=None) -> Path:
     return ckpt_dir
 ```
 
-`load(path)` (line 234) is the reverse:
+`load(path)` is the reverse:
 
 ```python
 def load(self, path) -> int:
@@ -776,9 +1172,9 @@ Read the current LR from group[0]. These are logged to W&B every
 
 ---
 
-## 7. Checkpointing (`checkpoint.py`)
+### Checkpointing (`checkpoint.py`)
 
-### 7.1 `CheckpointState` (line 30)
+### 7.1 `CheckpointState`
 
 ```python
 @dataclass
@@ -797,7 +1193,7 @@ deterministic resume.
 
 ### 7.2 RNG capture
 
-`_capture_rng_state()` (line 50) snapshots:
+`_capture_rng_state()` snapshots:
 
 - Python `random` (`py_state` — `version`, `internalstate`, `gauss`).
 - NumPy `np.random.get_state()`.
@@ -841,7 +1237,7 @@ to the per-rank HBM bandwidth.
 
 ---
 
-## 8. In-training validation (`validation.py`)
+### In-training validation (`validation.py`)
 
 ### 8.1 `DEFAULT_VAL_BIN`
 
@@ -880,7 +1276,7 @@ PPL" is computed this way.
 
 ---
 
-## 9. End-to-end step trace
+### End-to-end step trace
 
 A single optimizer step on a 4-GPU A100 pod:
 
@@ -918,7 +1314,7 @@ A single optimizer step on a 4-GPU A100 pod:
 
 ---
 
-## 10. Interview Q&A
+### Interview Q&A
 
 **Q1. Why partition parameters between NorMuon and AdamW by name
 pattern?**
@@ -1010,13 +1406,278 @@ the gradient?**
 
 ---
 
-## 11. Cross-links
+### Cross-links
 
-- Walkthrough: `learning_docs/1_Model_Architecture.md` §3 (model top-level).
-- Concepts: `docs/concepts/07-muon-optimizer.md` (Muon lineage + Newton–Schulz),
-  `docs/concepts/08-wsd-scheduler.md` (WSD phases),
-  `docs/concepts/09-fsdp2.md` (FSDP-2 mechanics),
-  `docs/concepts/03-mixture-of-experts.md` (EMA gate-bias derivation).
+- Walkthrough: `concepts/model-architecture.md` §3 (model top-level).
+- Concepts: `concepts/optimization.md` (Muon lineage + Newton–Schulz),
+  `concepts/optimization.md` (WSD phases),
+  `concepts/optimization.md` (FSDP-2 mechanics),
+  `concepts/gdn-and-mla.md` (EMA gate-bias derivation).
 - Tests: `tests/unit/test_training.py` (optimizer + scheduler + trainer tests).
-- Evaluation: `learning_docs/5_Evaluation_and_Ablations.md` (the 6-eval suite +
-  ablations), `learning_docs/4_Optimizations.md` (the four optimization flags).
+- Evaluation: see the Evaluation scope note at the top of this file — the
+  6-eval suite and ablations were removed in the 2026-08-04 cleanup;
+  in-training validation (`Trainer.evaluate`) is covered above.
+
+
+## Tokenization and Data Design
+
+
+> **Bridges to:** [`training.md`(training.md) (entire)
+
+## Learning objectives
+
+After this file, you can:
+
+1. State BPE tokenization and why it's the modern default.
+2. Explain byte-level fallback and the 64,256 vocab choice.
+3. State the 40× params-in-tokens rule and its provenance.
+4. Defend HyMo's data mixture (10 sources, 30 B tokens at
+   750 M active).
+
+## Intuition
+
+A neural network operates on **integer token IDs**, not on
+text. The tokenization step maps text to a sequence of
+integers in a fixed vocabulary.
+
+Three common approaches:
+
+| Method | Vocab size | Pros | Cons |
+|---|---|---|---|
+| **Word-level** | 100 k–1 M | Simple, interpretable | Huge vocab; rare-word OOV. |
+| **BPE** (byte-pair encoding) | 32 k–64 k | Compromise; handles rare words via subwords | Pre-tokenizer matters |
+| **Byte-level** | 256 + special | No OOV ever | Long sequences |
+
+HyMo uses **BPE-64k** (a BPE vocabulary of 64 k tokens) plus
+**256 byte-level fallback tokens** for OOV. Total vocab:
+`64,256`.
+
+### BPE basics
+
+BPE starts from a character-level vocab and iteratively
+merges the most-frequent adjacent pairs into new tokens.
+After `V - 256` merges, you have a `V`-sized vocab.
+
+```
+text:  "the cat sat on the mat"
+tokens: ["the", "cat", "sat", "on", "the", "mat"]
+       (each is a BPE token, learned from data)
+```
+
+The most common short words become single tokens; rarer or
+longer words get split into subwords. With `V = 64_000`,
+the median word is a single token and the long tail of
+rarer words is multi-token.
+
+### Byte-level fallback
+
+A BPE tokenizer can only emit tokens it knows. If it sees
+an unknown word (e.g. a foreign script), it maps to `<unk>`
+and the information is lost.
+
+**Byte-level fallback** adds 256 tokens, one per UTF-8 byte
+value (`<0x00>`, ..., `<0xFF>`). When the BPE tokenizer
+would emit `<unk>`, the encoder falls back to the byte tokens
+for the original UTF-8 bytes.
+
+With BPE-64k + 256 byte tokens, **every UTF-8 string is
+losslessly encodable**. The model never sees `<unk>`.
+
+## Math derivation
+
+### BPE merge count
+
+For a corpus of `C` characters, the merge algorithm runs
+until `|V|` merges are done. Each merge replaces two adjacent
+tokens with a new one, halving the sequence length. The
+final sequence length is `~C / log_{|V|}(C / |V|)` — much
+shorter than character-level.
+
+### Compression ratio
+
+A 64 k BPE typically achieves ~4 characters per token on
+English text. For code, ~3 characters per token (because
+of long identifiers and whitespace patterns). For multilingual
+text, ~2 characters per token.
+
+With `vocab_size = 64_256` and `max_seq_len = 4_096`, the
+"characters per context window" is `~ 4 * 4096 = 16 K`
+characters of English text.
+
+### Tokens-to-params ratio
+
+The standard Chinchilla rule (Hoffmann et al. 2022) was
+**20 tokens per parameter** at training compute optimum.
+Modern frontier practice (Llama-3, DeepSeek-V3) uses
+**40 tokens per parameter** — over-training, on the
+assumption that more tokens = better quality, even at the
+expense of compute.
+
+For HyMo at 750 M active params:
+
+- 20× Chinchilla: `15 B tokens`
+- 40× over-training: `30 B tokens`
+
+The v1.0 ships with 30 B tokens — the over-training budget.
+Quality wins from extra tokens: ~5-10% better than 20× at
+the same architecture (Llama-3's published comparison).
+
+### The mixture (10 sources)
+
+HyMo trains on 10 source corpora with weighted mixing:
+
+| Source | Role |
+|---|---|
+| FineWeb-Edu (filtered `score >= 3`) | High-quality English web |
+| FineWeb (non-edu) | English web breadth |
+| Stack v2 Python | Code |
+| Stack v2 Java | Code |
+| Stack v2 C++ | Code |
+| SlimPajama | Multi-source (books, wiki, web) |
+| DCLM Baseline | High-quality web |
+| Dolma Wiki | Encyclopedic |
+| Dolma Books | Long-form text |
+| Cosmopedia | Synthetic textbook |
+
+Weights are tuned in `configs/hymo_mixture.yaml`. Roughly:
+
+- ~50% FineWeb-Edu (the high-quality backbone).
+- ~10% code (Stack v2 sum).
+- ~10% books + wiki.
+- ~30% other (FineWeb non-edu, SlimPajama, DCLM,
+  Cosmopedia).
+
+The mixture is loaded by `DataConfig` (see
+`training.md` §2).
+
+## Implementation in HyMo
+
+- `src/hymo/data/tokenizer.py` — module-level constants:
+  `BYTE_VOCAB_SIZE = 256`, `_BASE_VOCAB_SIZE = 64_000`,
+  `_TOTAL_VOCAB_SIZE = 64_256`.
+- `src/hymo/data/tokenizer.py:train_bpe_tokenizer` — `train_bpe_tokenizer`:
+  the BPE training entry point.
+- `src/hymo/data/tokenizer.py:_byte_fallback_encode` — `_byte_fallback_encode`:
+  the OOV fallback.
+- `src/hymo/data/tokenizer.py:ExtendedTokenizer` — `class ExtendedTokenizer`:
+  the user-facing wrapper.
+- `src/hymo/data/prepare_validation.py` — builds the held-out
+  validation binary from FineWeb-Edu via `ExtendedTokenizer`.
+
+> **Scope note (2026-08-04 cleanup):** the in-repo pipeline modules
+> (`sources.py` — 10 streaming loaders, `sharding.py` — `ShardWriter` /
+> `ShardDataset` / `DataLoaderBuilder`, `data_config.py` — `SourceSpec` /
+> `DataConfig`) were removed. The trainer consumes a raw `data_iter` and
+> the data-preparation pipeline lives in the workspace
+> `LLM/shared_data/` package; only the tokenizer and validation-set
+> builder remain in-repo.
+
+## Worked example
+
+Production scale:
+
+- 30 B tokens × 4 bytes/token (uint32) = 120 GB of
+  shard data.
+- 30 B tokens × ~4 characters/token (English) = 120 B
+  characters = ~240 GB of raw text (avg 1 byte per
+  character).
+- ~600 shards at 50 M tokens each.
+- Train time: 30 B / 524_288 tokens/step = 57,220
+  optimizer steps.
+- Wall-clock: 57,220 × 8 s/step ≈ 5-7 days on 4× A100
+  80 GB SXM.
+
+Per-token FLOPs (forward + backward, dense + MoE):
+
+- MLA: ~70 GFLOPs / 4096 tokens = 17 MFLOPs/token.
+- GDN: ~80 GFLOPs / 4096 tokens = 20 MFLOPs/token.
+- MoE: 8 layers × 12 MFLOPs = 96 MFLOPs/token.
+- Dense FFN: 24 layers × 6.2 MFLOPs = 149 MFLOPs/token.
+- Head: 57.5 MFLOPs/token.
+- Embed: 896 MAC/token (negligible).
+- Total: ~340 MFLOPs/token.
+
+Per-token wall-clock: 340 MFLOPs / 330 TFLOPs/s = ~1 µs.
+With FSDP + Triton + torch.compile, real per-token: ~3 µs.
+Per micro-batch (B=4, T=4096): ~50 ms. Per optimizer step:
+~8 s. Per 57,220 steps: ~127 hours = ~5.3 days.
+
+## Interview Q&A
+
+**Q1. Why 64 k BPE + 256 byte fallback?**
+
+> A: 64 k is the modern standard for English + code +
+> multilingual coverage. The 256 byte tokens cover every
+> UTF-8 byte; with byte fallback, every string is
+> losslessly encodable. Total 64,256 is what
+> `ExtendedTokenizer` emits.
+
+**Q2. Why 30 B tokens and not 15 B or 60 B?**
+
+> A: 30 B is 40× params-in-tokens at 750 M active — the
+> over-training budget used by Llama-3 and DeepSeek-V3.
+> 15 B (20×) would be Chinchilla-optimal; 60 B would be
+> 80×, which over-trains at the cost of compute. 40× is
+> the empirical sweet spot.
+
+**Q3. Why is the FineWeb-Edu quality threshold 3?**
+
+> A: FineWeb-Edu scores 0-5 per document; threshold 3 keeps
+> the upper half of quality. Higher thresholds (4-5) lose
+> too much data; lower thresholds (1-2) admit more noise.
+> 3 is the Llama-3 / DeepSeek-V3 default.
+
+**Q4. Why 10 sources and not 1?**
+
+> A: Diversity. Different sources contribute different
+> capabilities: FineWeb-Edu is general English; Stack v2 is
+> code; Dolma Books is long-form; Cosmopedia is synthetic
+> instructional text. A mixture of 10 covers all the major
+> capabilities a 750 M model can absorb.
+
+**Q5. Why 50 M tokens per shard?**
+
+> A: 50 M tokens = 200 MB per shard (uint32 = 4 bytes).
+> This is large enough that file I/O overhead is amortized
+> but small enough that memmap pages can be paged in fast.
+> At 4096 tokens per `__getitem__`, each access reads ~16 KB
+> = 1 page on most filesystems.
+
+**Q6. Why `np.memmap` instead of loading all shards into RAM?**
+
+> A: 30 B tokens × 4 bytes = 120 GB. RAM is typically
+> 100 GB on a single-host dev machine. `np.memmap` lets the
+> OS page in only the 16 KB chunk per `__getitem__` and
+> discard it immediately. The cost is per-`__getitem__` page
+> faults, which is fast enough to keep up with A100
+> consumption.
+
+**Q7. Why byte-level fallback rather than a larger BPE
+vocab?**
+
+> A: A larger BPE vocab (e.g. 128 k) would cover more
+> Unicode scripts but at the cost of a bigger embedding
+> table (each row is `dim` floats). The byte fallback
+> covers all of UTF-8 with only 256 extra tokens — much
+> cheaper than a 64 k-vocab expansion.
+
+## Cross-links
+
+- [`training.md`(training.md) (entire
+  walkthrough).
+- [`concepts/design.md`(concepts/design.md) §6 (data
+  mixture rationale).
+- [`concepts/gdn-and-mla.md`](concepts/gdn-and-mla.md) — attention
+  FLOPs per token.
+- [`concepts/gdn-and-mla.md`](concepts/gdn-and-mla.md) —
+  linear-attention FLOPs per token.
+
+## References
+
+- [concepts/model-architecture.md](concepts/model-architecture.md) — the model the trainer runs.
+- [concepts/optimization.md](concepts/optimization.md) — optimizer, scheduler, FSDP-2 mechanics.
+- [concepts/gdn-and-mla.md](concepts/gdn-and-mla.md) — MoE EMA gate-bias and MTP wiring.
+- [concepts/kernels.md](concepts/kernels.md) — the Triton GDN kernel.
+- [references/config.md](references/config.md) — the `TrainingConfig` fields.
+- [README.md](../README.md) — the public overview and quickstart.
+- Source: `src/hymo/training/trainer.py`, `src/hymo/training/checkpoint.py`, `src/hymo/training/validation.py`, `src/hymo/data/tokenizer.py`, `src/hymo/data/prepare_validation.py`, `src/hymo/training/partition.py`, `src/hymo/training/optimizer.py`, `src/hymo/training/scheduler.py`, `src/hymo/training/fsdp.py`.

@@ -1,4 +1,6 @@
-# HyMo: Architecture & Design
+# HyMo — Design
+
+> Version: v1.0 (pre-training). This is the original architecture & design document, moved as-is.
 
 > **Version:** v1.0 (pre-training). The 4 parallel ablations described in §8/§16 are deferred to **v1.1** and do not block the primary pre-training deliverable.
 > **Status:** Architecture & design specification, July 2026. *(Plan-time document; see "Design vs. implementation" notes below for where the shipped code diverged.)*
@@ -16,12 +18,12 @@
 >
 > | § | Plan said | Shipped as | Truth lives in |
 > |---|-----------|------------|----------------|
-> | §12a.1 | GDN kernel: `fla-org chunk_gated_delta_rule` (or vendored copy) | **Hand-written Triton kernel** in `src/hymo/models/gdn_triton.py` (`triton_gated_delta_rule`, `TritonGDNFunction`). `fla` was never added to dependencies; `pyproject.toml:48` has it commented out. | [`learning_docs/4_Optimizations.md`](../learning_docs/4_Optimizations.md) §GDN kernel; [`docs/concepts/10-triton-kernels.md`](concepts/10-triton-kernels.md) |
-> | §12a.2 | MoE mixed precision (FP16 expert matmuls) | **BF16** expert matmuls (the BF16-cast in `DeepSeekMoE.forward`); the `moe_mixed_precision` flag toggles the dispatch. | [`learning_docs/4_Optimizations.md`](../learning_docs/4_Optimizations.md) §MoE |
-> | §12a.3 | `torch.compile(mode="reduce-overhead")` on GDN forward | `torch_compile_gdn` flag on `TrainingConfig` (default `True`); toggled via `GatedDeltaNetBlock.use_compile` from `Trainer._thread_optimization_flags`. | [`learning_docs/4_Optimizations.md`](../learning_docs/4_Optimizations.md) §torch.compile |
-> | §12a.4 | CUDA Graphs on MLA | `cuda_graphs_mla` flag on `TrainingConfig` (default `True`); toggled via `MLABlock.use_cuda_graphs` from `Trainer._thread_optimization_flags`. | [`learning_docs/4_Optimizations.md`](../learning_docs/4_Optimizations.md) §CUDA graphs |
-> | §5.2 / optimizer partition | MoE-excluded NorMuon | Implemented as the `ParameterPartition` in `src/hymo/training/partition.py` (`goes_to_adamw`, `partition_parameters`). | [`learning_docs/3_Training_Pipeline.md`](../learning_docs/3_Training_Pipeline.md) §Optimizer |
-> | EMA gate-bias (MoE aux-loss-free) | "EMA on MoE gate bias" | Implemented in `src/hymo/models/moe.py::DeepSeekMoE.update_gate_bias`; alpha = 0.02 default; speed = 0.001. | [`docs/concepts/03-mixture-of-experts.md`](concepts/03-mixture-of-experts.md) |
+> | §12a.1 | GDN kernel: `fla-org chunk_gated_delta_rule` (or vendored copy) | **Hand-written Triton kernel** in `src/hymo/models/gdn_triton.py` (`triton_gated_delta_rule`, `TritonGDNFunction`). `fla` was never added to dependencies; `pyproject.toml:48` has it commented out. | [`optimization.md`](optimization.md) §GDN kernel; [`docs/kernels.md`](kernels.md) |
+> | §12a.2 | MoE mixed precision (FP16 expert matmuls) | **BF16** expert matmuls (the BF16-cast in `DeepSeekMoE.forward`); the `moe_mixed_precision` flag toggles the dispatch. | [`optimization.md`](optimization.md) §MoE |
+> | §12a.3 | `torch.compile(mode="reduce-overhead")` on GDN forward | `torch_compile_gdn` flag on `TrainingConfig` (default `True`); toggled via `GatedDeltaNetBlock.use_compile` from `Trainer._thread_optimization_flags`. | [`optimization.md`](optimization.md) §torch.compile |
+> | §12a.4 | CUDA Graphs on MLA | `cuda_graphs_mla` flag on `TrainingConfig` (default `True`); toggled via `MLABlock.use_cuda_graphs` from `Trainer._thread_optimization_flags`. | [`optimization.md`](optimization.md) §CUDA graphs |
+> | §5.2 / optimizer partition | MoE-excluded NorMuon | Implemented as the `ParameterPartition` in `src/hymo/training/partition.py` (`goes_to_adamw`, `partition_parameters`). | [`../training.md`](../training.md) §Optimizer |
+> | EMA gate-bias (MoE aux-loss-free) | "EMA on MoE gate bias" | Implemented in `src/hymo/models/moe.py::DeepSeekMoE.update_gate_bias`; alpha = 0.02 default; speed = 0.001. | [`docs/gdn-and-mla.md`](gdn-and-mla.md) |
 >
 > If you are reading this document for an interview or to teach, the
 > **shaped choices** (3:1 ratio, partial-RoPE, MQA-4, MoE-on-MLA-only,
@@ -156,7 +158,7 @@ Among the 24 GDN positions, the 7 GDN layers immediately following each MLA posi
 
 ### 2.3 Gated Delta Net block (GDN)
 
-The GDN block is the linear-attention primitive. The eager recurrence in [`models/gdn.py:97-120`](../src/hymo/models/gdn.py) (`_gated_delta_rule`) is a single loop over `T` (correct in math, slow in Python). HyMo's forward dispatches to the hand-written Triton kernel via `_kernel_out` ([`gdn.py:142`](../src/hymo/models/gdn.py)), which calls `triton_gated_delta_rule` from [`models/gdn_triton.py`](../src/hymo/models/gdn_triton.py) — the parallel-chunk algorithm from Yang et al. 2412.06464 (ICLR 2025).
+The GDN block is the linear-attention primitive. The eager recurrence in [`models/gdn.py:GatedDeltaNetBlock._gated_delta_rule`](../../src/hymo/models/gdn.py) (`_gated_delta_rule`) is a single loop over `T` (correct in math, slow in Python). HyMo's forward dispatches to the hand-written Triton kernel via `_kernel_out` ([`gdn.py:GatedDeltaNetBlock._kernel_out`](../../src/hymo/models/gdn.py)), which calls `triton_gated_delta_rule` from [`models/gdn_triton.py`](../../src/hymo/models/gdn_triton.py) — the parallel-chunk algorithm from Yang et al. 2412.06464 (ICLR 2025).
 
 **Block structure (per GDN layer):**
 
@@ -224,7 +226,7 @@ This is a publishable claim because no surveyed 2025-2026 hybrid (Jamba, Zamba, 
 
 ### 2.4 Multi-Head Latent Attention block (MLA)
 
-The MLA block is the full-attention primitive. Reuses the MLA implementation in [`models/mla.py:52-132`](../src/hymo/models/mla.py) with one addition: **partial-RoPE on the first 25% of head_dim** (see §3.1). The revision changes the GQA group structure from 1.75 to MQA-4.
+The MLA block is the full-attention primitive. Reuses the MLA implementation in [`models/mla.py:MultiHeadLatentAttention.forward`](../../src/hymo/models/mla.py) with one addition: **partial-RoPE on the first 25% of head_dim** (see §3.1). The revision changes the GQA group structure from 1.75 to MQA-4.
 
 **Per-MLA-layer parameters:** ~5.6M (q_lora 0.2M + q_norm 0 + wq_b 2.0M + wkv_a 0.11M + kv_norm 0 + wkv_b 0.5M + wo 0.7M + 2 RMSNorms 1.5K). Slightly less than an earlier draft because MQA-4 has fewer KV heads.
 
@@ -259,7 +261,7 @@ At 750M active with 16 query heads, the per-KV-head capacity is 4× the per-quer
 
 **Why GQA-1.75 was wrong:**
 
-GQA-1.75 means each KV head serves 1.75 query heads on average, which is a non-integer ratio that would require a per-query KV-group lookup — a hack, since the per-KV-head capacity is barely larger than the per-query-head capacity. The shipped MLA is **MQA-4** ([`mla.py:21`](../src/hymo/models/mla.py), `MultiHeadLatentAttention`): `n_kv_groups = 4` KV heads shared by `n_heads / n_kv_groups = 4` query heads each, with a single `F.scaled_dot_product_attention(..., enable_gqa=True)` call in `forward` ([`mla.py:91`](../src/hymo/models/mla.py)). MQA-4 is cleaner and gives each KV head 4× the capacity to "explain" 4 query heads. Empirically, this is the better trade.
+GQA-1.75 means each KV head serves 1.75 query heads on average, which is a non-integer ratio that would require a per-query KV-group lookup — a hack, since the per-KV-head capacity is barely larger than the per-query-head capacity. The shipped MLA is **MQA-4** ([`mla.py:MultiHeadLatentAttention`](../../src/hymo/models/mla.py), `MultiHeadLatentAttention`): `n_kv_groups = 4` KV heads shared by `n_heads / n_kv_groups = 4` query heads each, with a single `F.scaled_dot_product_attention(..., enable_gqa=True)` call in `forward` ([`mla.py:MultiHeadLatentAttention.forward`](../../src/hymo/models/mla.py)). MQA-4 is cleaner and gives each KV head 4× the capacity to "explain" 4 query heads. Empirically, this is the better trade.
 
 ### 2.5 MoE (MLA blocks only)
 
@@ -304,7 +306,7 @@ Meta FAIR (2510.04800) uses top-1, Jamba-1.5 uses top-2 every 2 layers, Qwen3-Ne
 
 **Why aux-loss-free with dynamic bias update (inherited from the prior stability-fix plan, now extended with EMA smoothing):**
 
-The MoE gate in [`models/moe.py:36-50`](../src/hymo/models/moe.py) does biased-sigmoid routing: scores = sigmoid(gate(x)), top-k selected, normalized. The gate bias is *not* an optimizer parameter — it is updated by the `update_gate_bias` function based on running expert-load statistics ([`moe.py:89-98`](../src/hymo/models/moe.py)). This is the DeepSeek-V3 "auxiliary-loss-free" design.
+The MoE gate in [`models/moe.py:DeepSeekMoE`](../../src/hymo/models/moe.py) does biased-sigmoid routing: scores = sigmoid(gate(x)), top-k selected, normalized. The gate bias is *not* an optimizer parameter — it is updated by the `update_gate_bias` function based on running expert-load statistics ([`moe.py:DeepSeekMoE.update_gate_bias`](../../src/hymo/models/moe.py)). This is the DeepSeek-V3 "auxiliary-loss-free" design.
 
 `balance_loss_alpha = 0.0` (default) is the right choice and is preserved. The aux loss *and* the bias update would fight each other; the bias update alone is sufficient.
 
@@ -369,7 +371,7 @@ The novel claim from §2.3. To restate: routing overhead is a larger fraction of
 
 The output head is tied with the embedding (`tie_embeddings=True`): `head.weight = embed.weight`. This is setting; we keep it. Tied embeddings cut the parameter count by ~49M (one less 64k × 768 matrix).
 
-**Logit softcap:** 15.0. From [`model.py:131`](../src/hymo/models/model.py), the logits are passed through `15 * tanh(logits / 15)` before cross-entropy. This prevents the softmax from saturating during warmup; standard since PaLM.
+**Logit softcap:** 15.0. From [`model.py:HyMo.softcap`](../../src/hymo/models/model.py), the logits are passed through `15 * tanh(logits / 15)` before cross-entropy. This prevents the softmax from saturating during warmup; standard since PaLM.
 
 ### 2.8 Multi-Token Prediction (MTP) — depth=2, weights [0.3, 0.1]
 
@@ -397,15 +399,15 @@ DeepSeek-V3 uses 0.3. The empirical pattern across papers is: MTP weight 0.1-0.5
 
 **Why the MTP head reuses main_model.head:**
 
-Inherited from ([`mtp.py:84-89`](../src/hymo/models/mtp.py)). The MTP module shares the output projection with the main model. This means MTP supervision flows through the same head as the main loss, which is a learned-shared-output regularization.
+Inherited from ([`mtp.py:MultiTokenPrediction`](../../src/hymo/models/mtp.py)). The MTP module shares the output projection with the main model. This means MTP supervision flows through the same head as the main loss, which is a learned-shared-output regularization.
 
 **The MTP path uses the same checkpointed layer loop as main forward:**
 
-Inherited from stability fix. [`model.py:68-71`](../src/hymo/models/model.py) has the `_run_layers` method that both `forward` and `forward_with_hidden` route through (it simply runs `x = layer(x)` over the 32-layer stack). MTP needs the hidden state (which is the output of the *norm after the last layer*), so it must use `forward_with_hidden`. MTP path *bypassed* the shared layer loop before the fix; inherited the fix.
+Inherited from stability fix. [`model.py:HyMo._run_layers`](../../src/hymo/models/model.py) has the `_run_layers` method that both `forward` and `forward_with_hidden` route through (it simply runs `x = layer(x)` over the 32-layer stack). MTP needs the hidden state (which is the output of the *norm after the last layer*), so it must use `forward_with_hidden`. MTP path *bypassed* the shared layer loop before the fix; inherited the fix.
 
 **Gradient coupling to the embedding:**
 
-The MTP module uses `self.embed = main_model.embed` ([`mtp.py:84`](../src/hymo/models/mtp.py)) to embed the target tokens. This means MTP gradient flows into the shared embedding. This is intentional but under-documented in ; documented it explicitly: **the MTP path is not a side-branch that can be detached, it shares gradient with the main path through the embedding.** This is a 0.1-0.2 PPL improvement vs detached MTP targets in published ablations (DeepSeek-V3).
+The MTP module uses `self.embed = main_model.embed` ([`mtp.py:MultiTokenPrediction.forward`](../../src/hymo/models/mtp.py)) to embed the target tokens. This means MTP gradient flows into the shared embedding. This is intentional but under-documented in ; documented it explicitly: **the MTP path is not a side-branch that can be detached, it shares gradient with the main path through the embedding.** This is a 0.1-0.2 PPL improvement vs detached MTP targets in published ablations (DeepSeek-V3).
 
 ---
 
@@ -549,7 +551,7 @@ DeepSeek-V3 published config uses AdamW for MoE experts. The NorMuon paper (arXi
 
 ### 5.3 Joint WSD scheduler
 
-Inherited from stability fix ([`training/scheduler.py:43-113`](../src/hymo/training/scheduler.py)). The scheduler drives both optimizers with one multiplicative factor at every step, so `lr_muon / lr_adamw = 0.02 / 3e-4 = 66.7` stays constant across warmup/stable/decay.
+Inherited from stability fix ([`training/scheduler.py:JointWSDScheduler`](../../src/hymo/training/scheduler.py)). The scheduler drives both optimizers with one multiplicative factor at every step, so `lr_muon / lr_adamw = 0.02 / 3e-4 = 66.7` stays constant across warmup/stable/decay.
 
 **WSD configuration (quality-first):**
 - `total_steps = 57,220` (= 30B tokens / (4 micro_batch × 4096 seq × 8 grad_accum × 4 GPUs) = 30,000,000,000 / 524,288 ≈ 57,220)
@@ -979,7 +981,7 @@ Compare:
 
 ### Inherited from
 
-- All 6 stability fixes (joint WSD, aux-loss-free routing, MTP checkpointing, deterministic validation, exact-name optimizer partition, config-driven trainer) — originally planned in `docs/superpowers/plans/2026-07-15-training-stability-fixes.md`, which was never committed; the fixes shipped directly in `src/hymo/` (see `docs/superpowers/specs/` for the surviving plan artifacts).
+- All 6 stability fixes (joint WSD, aux-loss-free routing, MTP checkpointing, deterministic validation, exact-name optimizer partition, config-driven trainer) — originally planned in `docs/superpowers/plans/2026-07-15-training-stability-fixes.md`, which was never committed; the fixes shipped directly in `src/hymo/`. (The `docs/superpowers/` plan artifacts were removed in the 2026-08-05 layout cleanup; the fixes themselves remain in code.)
 - μP initialization (first principles, not from a single paper).
 - Cautious weight decay (Lion-style mask).
 - Atomic checkpointing with full RNG state.
@@ -1168,13 +1170,13 @@ The 5-7 day target is *contingent on all four*. Removing any of the four extends
 
 ### 12a.1 Fused Triton GDN kernel (the biggest win)
 
-**The problem:** the eager GDN recurrence in [`models/gdn.py:97-120`](../src/hymo/models/gdn.py) (`_gated_delta_rule`) is a Python loop over `T` tokens. For T=4096, that's 4,096 Python iterations per GDN forward per micro-batch, × 24 GDN layers × 4 micro-batches = ~400K Python iterations per training step. Each iteration has ~10-20 Python bytecodes (loop, index, attribute access, math). The Python overhead alone is ~5-10× the GPU compute time.
+**The problem:** the eager GDN recurrence in [`models/gdn.py:GatedDeltaNetBlock._gated_delta_rule`](../../src/hymo/models/gdn.py) (`_gated_delta_rule`) is a Python loop over `T` tokens. For T=4096, that's 4,096 Python iterations per GDN forward per micro-batch, × 24 GDN layers × 4 micro-batches = ~400K Python iterations per training step. Each iteration has ~10-20 Python bytecodes (loop, index, attribute access, math). The Python overhead alone is ~5-10× the GPU compute time.
 
-**The solution:** replace the Python loop with a single fused Triton kernel implementing the parallel-chunk algorithm from Yang et al. (Gated DeltaNet, arXiv 2412.06464, ICLR 2025). The shipped kernel is the hand-written `triton_gated_delta_rule` / `TritonGDNFunction` in [`models/gdn_triton.py`](../src/hymo/models/gdn_triton.py) — no `fla` dependency (commented out at `pyproject.toml:48`).
+**The solution:** replace the Python loop with a single fused Triton kernel implementing the parallel-chunk algorithm from Yang et al. (Gated DeltaNet, arXiv 2412.06464, ICLR 2025). The shipped kernel is the hand-written `triton_gated_delta_rule` / `TritonGDNFunction` in [`models/gdn_triton.py`](../../src/hymo/models/gdn_triton.py) — no `fla` dependency (commented out at `pyproject.toml:48`).
 
 **Wall-clock saving:** 3-5× speedup of the GDN forward+backward path. The GDN path is 75% of the stack and ~40% of the per-token FLOPs (the other 60% is MLA + MoE, which are not the bottleneck). Net: 30% wall-clock saving (50,000 tok/s → 65,000+ tok/s).
 
-**Implementation location:** `models/gdn.py:forward` dispatches through `_kernel_out` ([`gdn.py:142`](../src/hymo/models/gdn.py)) to the hand-written kernel `triton_gated_delta_rule` in `models/gdn_triton.py`.
+**Implementation location:** `models/gdn.py:forward` dispatches through `_kernel_out` ([`gdn.py:GatedDeltaNetBlock._kernel_out`](../../src/hymo/models/gdn.py)) to the hand-written kernel `triton_gated_delta_rule` in `models/gdn_triton.py`.
 
 **Validation:** unit test `tests/test_gdn_kernel.py` verifies the Triton kernel matches a pure-Python reference at 1e-3 tolerance on random inputs of shape (B=2, T=128, n_heads=40, headdim=32, d_state=32). The test runs before the primary run starts; if it fails, fall back to the Python implementation at ~50,000 tok/s (6.94 days, still within the 5-7 day envelope by 0.06 days).
 
@@ -1182,7 +1184,7 @@ The 5-7 day target is *contingent on all four*. Removing any of the four extends
 
 ### 12a.2 MoE mixed precision in dispatch
 
-**The problem:** the MoE dispatch in [`models/moe.py`](../src/hymo/models/moe.py) is the second-largest cost after the GDN recurrence. The current dispatch path uses BF16 throughout — including the scatter-add indices, which are integer but stored as BF16 for tensor contiguity. The scatter-add has 2× more bytes than necessary.
+**The problem:** the MoE dispatch in [`models/moe.py`](../../src/hymo/models/moe.py) is the second-largest cost after the GDN recurrence. The current dispatch path uses BF16 throughout — including the scatter-add indices, which are integer but stored as BF16 for tensor contiguity. The scatter-add has 2× more bytes than necessary.
 
 **The solution:** cast the scatter-add indices to FP16 (16-bit integer is sufficient for the 16-expert case) and the expert-matmul inputs to BF16. The 50% bandwidth reduction on the index path saves ~10% of the MoE dispatch cost. The matmuls stay in BF16 (no accuracy loss on the matmul side).
 
@@ -1213,7 +1215,7 @@ The 5-7 day target is *contingent on all four*. Removing any of the four extends
 
 ### 12a.4 CUDA Graphs for MLA forward
 
-**The problem:** the MLA forward in [`models/mla.py:52-132`](../src/hymo/models/mla.py) has a control flow path (q split into rope/nope, k/v from compressed KV, attention with the latent bottleneck). The Python overhead is ~1-2ms per layer per micro-batch, and there are 8 MLA layers × 4 micro-batches = 32 invocations per step. Total Python overhead: ~30-50ms per step.
+**The problem:** the MLA forward in [`models/mla.py:MultiHeadLatentAttention.forward`](../../src/hymo/models/mla.py) has a control flow path (q split into rope/nope, k/v from compressed KV, attention with the latent bottleneck). The Python overhead is ~1-2ms per layer per micro-batch, and there are 8 MLA layers × 4 micro-batches = 32 invocations per step. Total Python overhead: ~30-50ms per step.
 
 **The solution:** capture the MLA forward as a CUDA Graph. The graph captures the fixed-shape path (q projection, k/v decompression, attention, output projection) and replays it without Python overhead. The dynamic-shape MoE dispatch and GDN stay in eager mode.
 
@@ -1496,3 +1498,13 @@ The $2,148 total is the *quality-first* budget. It includes 4 publishable ablati
 ---
 
 ---
+
+## References
+
+- [model-architecture.md](model-architecture.md) — the code walkthrough of the shipped stack.
+- [gdn-and-mla.md](gdn-and-mla.md) — the mechanism deep-dives.
+- [optimization.md](optimization.md) — the optimization stack.
+- [kernels.md](kernels.md) — the Triton kernel.
+- [training.md](../training.md) — the training pipeline.
+- [config.md](../references/config.md) — the config system.
+- Source: `src/hymo/models/*.py`, `src/hymo/training/*.py`, `src/hymo/core/config.py`.

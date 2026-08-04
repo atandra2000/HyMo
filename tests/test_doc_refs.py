@@ -1,6 +1,7 @@
 """Doc↔code alignment checker for HyMo.
 
-HyMo's doc corpus (docs/ + learning_docs/) uses two citation styles:
+HyMo's doc corpus (docs/ + root README/AGENTS/SKILLS) uses two citation
+styles:
 
 1. Symbol anchors — ``src/hymo/models/mla.py:MLABlock.forward`` — resolved
    by importing the module and walking the dotted symbol.
@@ -28,19 +29,27 @@ if str(SRC) not in sys.path:
 
 DOC_PATHS = [
     ROOT / "docs",
-    ROOT / "learning_docs",
     ROOT / "README.md",
     ROOT / "AGENTS.md",
     ROOT / "SKILLS.md",
 ]
 # The design spec embeds literal `file.py:Symbol` metasyntax examples; skip it.
-SKIP_DOCS = {ROOT / "docs" / "superpowers" / "specs" / "2026-08-04-docs-expansion-design.md"}
+SKIP_DOCS: set[Path] = set()
 
 # src/hymo/...py:Symbol  or  src/hymo/...py:123  or  src/hymo/...py:72-88
 SYMBOL_ANCHOR_RE = re.compile(r"(src/hymo/[A-Za-z0-9_./-]+\.py):([A-Za-z_][A-Za-z0-9_.]*)")
 LINE_ANCHOR_RE = re.compile(r"(src/hymo/[A-Za-z0-9_./-]+\.py):(\d+)(?:-(\d+))?")
 LINK_RE = re.compile(r"\[[^\]]*\]\(([^)]+)\)")
 FENCE_RE = re.compile(r"```.*?```", re.DOTALL)
+
+# JIT kernels/classes defined under `if HAS_TRITON:` in gdn_triton.py — never
+# resolvable on a triton-less box (macOS/CI). Writers must cite the
+# always-defined host wrapper `triton_gated_delta_rule` for the kernel itself.
+JIT_SYMBOLS = {
+    "gdn_fwd_kernel",
+    "gdn_bwd_kernel",
+    "TritonGDNFunction",
+}
 
 
 def _doc_files() -> list[Path]:
@@ -65,7 +74,12 @@ def _load_module(rel_path: str):
     if not path.exists():
         _MODULE_CACHE[rel_path] = None
         return None, f"unknown file: {rel_path}"
-    dotted = ".".join(Path(rel_path).with_suffix("").parts)
+    parts = list(Path(rel_path).with_suffix("").parts)
+    # Citations use src/hymo/... but ROOT/src is the import root; strip the
+    # leading "src" component so `src.hymo.models.gdn` imports as `hymo.models.gdn`.
+    if parts and parts[0] == "src":
+        parts = parts[1:]
+    dotted = ".".join(parts)
     try:
         import importlib
 
@@ -120,6 +134,8 @@ def check_anchors() -> list[str]:
         text = doc.read_text(encoding="utf-8")
         rel = doc.relative_to(ROOT)
         for m in SYMBOL_ANCHOR_RE.finditer(text):
+            if m.group(2) in JIT_SYMBOLS:
+                continue
             ok, err = _resolve_symbol(m.group(1), m.group(2))
             if not ok:
                 failures.append(f"{rel}: {m.group(1)}:{m.group(2)} — {err}")

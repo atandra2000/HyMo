@@ -1,4 +1,4 @@
-# HyMo Model Architecture: Complete Code Walkthrough
+# HyMo — Model Architecture
 
 > **Prerequisite reading:** This document walks through every model file in `src/hymo/models/` line by line.
 > Start here if you want to understand *exactly* how a forward pass flows through the 32-layer hybrid stack.
@@ -11,7 +11,6 @@
 > - `moe.py` — DeepSeekMoE, DenseFFN, SwiGLU, and aux-loss-free routing
 > - `mtp.py` — Multi-Token Prediction heads (depth=2)
 > - `rope.py` — Rotary Position Embedding (partial RoPE)
-> - `init.py` — μP (Maximal Update Parametrization) initialization
 >
 > **Stale-section notice (as of commit `af89c48`):** Sections 5.5.3 ("Step 5:
 > Gated Delta Rule Recurrence", lines ~1655–1664) and 6 (the Triton kernel
@@ -20,25 +19,25 @@
 > (`gdn_triton.py::triton_gated_delta_rule`) with no `fla` dependency,
 > and the eager path (`gdn.py::_gated_delta_rule`) is the reference for
 > tests. The current source-of-truth for the kernel is
-> [`learning_docs/4_Optimizations.md`](4_Optimizations.md) §3 and
-> [`docs/concepts/10-triton-kernels.md`](../docs/concepts/10-triton-kernels.md).
+> [`optimization.md`](optimization.md) §3 and
+> [`kernels.md`](kernels.md).
 > Treat the `fla`/`chunk_gated_delta_rule` snippets in those sections
 > as **historical plan-time documentation** that illustrates the
 > recurrence interface, not as the implementation.
 >
 > **Companion concepts** (theory tier — read these for the *why* behind
-> each section):
+> each section; section numbers refer to this walkthrough's table of contents):
 >
-> - [`docs/concepts/11-hybrid-architectures.md`](../docs/concepts/11-hybrid-architectures.md) — §1 high-level architecture
-> - [`docs/concepts/01-attention.md`](../docs/concepts/01-attention.md) — §4 MLA
-> - [`docs/concepts/02-linear-attention-gdn.md`](../docs/concepts/02-linear-attention-gdn.md) — §5–§6 GDN + Triton kernel
-> - [`docs/concepts/04-position-encoding.md`](../docs/concepts/04-position-encoding.md) — §7 RoPE
-> - [`docs/concepts/03-mixture-of-experts.md`](../docs/concepts/03-mixture-of-experts.md) — §8 MoE
-> - [`docs/concepts/05-mtp.md`](../docs/concepts/05-mtp.md) — §9 MTP
-> - [`docs/concepts/06-mup-init.md`](../docs/concepts/06-mup-init.md) — §10 μP
-> - [`docs/concepts/10-triton-kernels.md`](../docs/concepts/10-triton-kernels.md) — §6 Triton kernel
+> - [`gdn-and-mla.md`](gdn-and-mla.md) — §1 high-level architecture
+> - [`model-architecture.md`](model-architecture.md) — §4 MLA
+> - [`gdn-and-mla.md`](gdn-and-mla.md) — §5–§6 GDN + Triton kernel
+> - [`model-architecture.md`](model-architecture.md) — §7 RoPE
+> - [`gdn-and-mla.md`](gdn-and-mla.md) — §8 MoE
+> - [`gdn-and-mla.md`](gdn-and-mla.md) — §9 MTP
+> - [`optimization.md`](optimization.md) — §10 μP
+> - [`kernels.md`](kernels.md) — §6 Triton kernel
 >
-> See [`docs/README.md`](../docs/README.md) for the full reading order
+> See [`../README.md`](../README.md) for the full reading order
 > and cross-reference table.
 
 ---
@@ -54,7 +53,7 @@
 7. [Rotary Position Embedding (rope.py)](#7-rotary-position-embedding-ropy)
 8. [Mixture of Experts (moe.py)](#8-mixture-of-experts-moepy)
 9. [Multi-Token Prediction (mtp.py)](#9-multi-token-prediction-mtppy)
-10. [μP Initialization (init.py)](#10-%C2%B5p-initialization-initpy)
+10. [Initialization — status note](#10-initialization--status-note)
 11. [End-to-End Forward Pass Trace](#11-end-to-end-forward-pass-trace)
 12. [Parameter Count Breakdown](#12-parameter-count-breakdown)
 
@@ -785,7 +784,7 @@ def build_hymo(config: HyMoConfig) -> HyMo:
     model = HyMo(config.model)
 
     # No custom init pass — PyTorch module defaults + inline gate/GDN init
-    # (see docs/concepts/06-mup-init.md). FSDP wrapping happens in the trainer.
+    # (see optimization.md). FSDP wrapping happens in the trainer.
 
     return model
 ```
@@ -2851,7 +2850,7 @@ PyTorch module defaults plus the inline MoE-gate init
 (`gate.bias = 0`, `gate.weight ~ N(0, 0.006²)` in `moe.py`) and the GDN
 recurrence init (`A_log`, `dt_bias`, `D` in `gdn.py`).
 
-See [`docs/concepts/06-mup-init.md`](../docs/concepts/06-mup-init.md)
+See [`optimization.md`](optimization.md)
 for the full honest status and where init actually happens.
 
 ## 11. End-to-End Forward Pass Trace — Memory & Compute Profile
@@ -3388,4 +3387,526 @@ def count_parameters(model: nn.Module) -> dict[str, int]:
 
 ---
 
-*Next: Read [2_Data_Pipeline.md](2_Data_Pipeline.md) for the data loading, tokenization, and sharding pipeline.*
+
+## Attention and Position Encoding
+
+
+### Learning objectives
+
+After this file, you can:
+
+1. Write down the multi-head attention operation and its
+   `O(N²)` complexity in time and memory.
+2. Derive MQA, GQA, and MLA from MHA, identifying exactly what
+   each one compresses.
+3. Explain why MLA's KV compression to a single low-rank vector
+   per token beats MQA at long context.
+4. Defend HyMo's choice of **MQA-4** (4 KV groups) over full
+   MLA-style compression at the production scale.
+
+### Intuition
+
+Standard multi-head attention has every query head attend to every
+key head. For inference with long context, the KV cache grows
+linearly with sequence length and quadratically with head count —
+the dominant memory cost of a transformer at decode time.
+
+Three engineering responses, in order of increasing compression:
+
+| Variant | What is shared | KV-cache size per token |
+|---|---|---|
+| **MHA** | nothing | `n_layers * n_heads * (head_dim + head_dim) * 2` |
+| **GQA** | `n_kv_groups < n_heads` query heads share KV | MHA / `n_heads / n_kv_groups` |
+| **MQA** | one KV head total | MHA / `n_heads` |
+| **MLA** | a single low-rank `kv_lora_rank`-dim vector | `n_layers * kv_lora_rank * 2` (no `n_heads` factor) |
+
+MLA is what DeepSeek-V2 introduced; it's the most aggressive —
+it bypasses the head dimension entirely and stores one shared
+low-rank latent per token, then per-head "absorption" matrices
+reconstruct each query/key's view at attention time. The cost is
+extra matmuls in the attention forward (which is cheap on GPU)
+and a slightly different gradient signal (which is what made
+absorbed MLA a careful research contribution).
+
+HyMo uses **MQA-4** (4 KV groups for 16 query heads → 4 query
+heads per KV group). It's the second-most aggressive of the four
+options — significantly cheaper than MHA, but not as aggressive
+as full MLA absorption. Why: at this scale (750 M active params),
+the MQA-4 trade-off wins on quality-per-FLOPs, and the per-block
+attention kernel is much simpler than the absorbed MLA kernel.
+
+### Math derivation
+
+### MHA
+
+Given `X ∈ ℝ^{T × d}` (`d` = model dim), project to `Q, K, V`:
+
+```
+Q = X W_Q, K = X W_K, V = X W_V     ∈ ℝ^{T × n_heads × head_dim}
+```
+
+Attention output:
+
+```
+Y = softmax(Q Kᵀ / √head_dim) V     ∈ ℝ^{T × n_heads × head_dim}
+```
+
+Complexity per layer: `O(T² · head_dim · n_heads)` in time,
+`O(T · n_heads · head_dim)` in KV cache size per token.
+
+### MQA — `n_kv_groups = 1`
+
+`K` and `V` are projected with a single shared head; `Q` keeps
+`n_heads`. The KV cache size per token shrinks by `n_heads`,
+but the attention math is unchanged.
+
+### GQA — `n_kv_groups ∈ (1, n_heads)`
+
+`K` and `V` are projected to `n_kv_groups` heads; `Q` is projected
+to `n_heads` heads; each query head attends to one KV group (round-
+robin assignment: query head `i` reads from KV group
+`i // (n_heads // n_kv_groups)`).
+
+KV cache size per token: `n_heads / n_kv_groups ×` MHA.
+
+### MLA — DeepSeek-style
+
+Project `X` once into a shared low-rank latent `c_t`:
+
+```
+c_t = X · W_KV_A                          ∈ ℝ^{T × kv_lora_rank}
+k_t = c_t · W_K_B                         ∈ ℝ^{T × n_heads × qk_nope_head_dim}
+v_t = c_t · W_V_B                         ∈ ℝ^{T × n_heads × v_head_dim}
+```
+
+Each query also has its own low-rank projection:
+
+```
+q_nope_t = X · W_Q_A · W_Q_B              ∈ ℝ^{T × n_heads × qk_nope_head_dim}
+```
+
+The "absorbed" trick: precompute `W_K_B` and `W_V_B` once, then
+absorb them into the query projection, so the attention op sees
+a single shared latent `c_t` plus per-head `q_t`. The KV cache
+becomes `c_t` only — `T × kv_lora_rank` — not `T × n_heads ×
+(qk_nope_head_dim + v_head_dim)`.
+
+This is the innovation of MLA: the cache shrinks by another
+factor of `n_heads × (qk_nope + v_head_dim) / kv_lora_rank`
+(roughly `n_heads × 2 × head_dim / kv_lora_rank`).
+
+### HyMo's choice — MQA-4
+
+| Knob | Value |
+|---|---|
+| `n_heads` | 16 |
+| `n_kv_groups` | 4 |
+| `q_lora_rank` | 224 |
+| `kv_lora_rank` | 128 |
+| `head_dim` | 128 |
+| `qk_rope_head_dim` | 32 |
+| `qk_nope_head_dim` | 96 |
+| `v_head_dim` | 128 |
+
+These are **not** full MLA — there's no `W_K_B`/`W_V_B`
+absorption. Instead, every query head reads from one of 4 KV
+heads (round-robin: query heads {0,1,2,3} → KV head 0; query
+heads {4,5,6,7} → KV head 1; …).
+
+The `q_lora_rank = 224` and `kv_lora_rank = 128` *are* full MLA:
+the query is first projected to 224 dim, then up-projected to
+`n_heads × qk_nope_head_dim`; the KV is projected to a shared
+128-dim latent per token and broadcast to the 4 KV heads. The
+KV-cache win is from `kv_lora_rank = 128` instead of
+`4 × 128 = 512`.
+
+So HyMo is **"MQA-4 with low-rank KV compression"** — MQA-style
+KV sharing plus the MLA-style latent. Pure MLA absorption (the
+trick that lets you store *only* `c_t`) is what was deferred; at
+this scale, the simpler kernel wins.
+
+### Implementation in HyMo
+
+- `src/hymo/models/mla.py:MultiHeadLatentAttention` — `class MultiHeadLatentAttention`
+  (the projection class).
+- `src/hymo/models/mla.py:MultiHeadLatentAttention.__init__` — `__init__` with the 8 MLA config
+  fields used.
+- `src/hymo/models/mla.py:MultiHeadLatentAttention.n_heads` — properties `n_heads`,
+  `n_kv_groups`, `qk_rope_head_dim`, `qk_nope_head_dim`,
+  `v_head_dim`.
+- `src/hymo/models/mla.py:MultiHeadLatentAttention.forward` — `forward(x)`: low-rank Q → split
+  into RoPE / NoPE parts; KV → 4 groups with partial RoPE on the
+  first `qk_rope_head_dim = 32` of `head_dim`; attention; output
+  projection.
+- `src/hymo/models/mla.py:MLABlock` — `class MLABlock`: pre-norm +
+  MultiHeadLatentAttention + residual.
+- `src/hymo/models/mla.py:MLABlock.__init__` — `__init__(config, layer_idx)`:
+  builds the block (pre-norm + attention + MoE + residuals).
+- `src/hymo/models/mla.py:MLABlock.forward` — `forward(x)`: full block
+  forward, including the soft-cap (no — the softcap is on the
+  logits, not the attention output; see `model.py:HyMo.softcap`).
+
+### Worked example
+
+HyMo at production scale:
+
+- 16 query heads × 128 head_dim = 2048 query projection width.
+- 4 KV heads × 128 = 512 KV projection width (or via latent:
+  128-dim shared latent broadcast to 4 heads).
+- Attention FLOPs per layer per token:
+  `2 * (q_dim * k_dim + q_dim * v_dim) ≈ 2 * (2048 * 512) = 2.1 M`
+  FLOPs, plus the `O(T²)` softmax matmul.
+- 8 MLA layers per forward, `T = 4096`, batch 4: ~`2.1 M * 4096 *
+  8 = 69 G` FLOPs for QK + softmax.
+
+The shared latent saves ~`4×` on KV cache size: from
+`(4096 * 16 * 256 * 2)` (MHA, both K and V) bytes down to
+`(4096 * 128 * 2) = 1 MB` per token — small but compounded
+across the 8 MLA layers at inference time.
+
+#### Interview Q&A
+
+**Q1. Why does MLA beat MQA at long context?**
+
+> A: MQA collapses all KV heads into one; MLA collapses all KV
+> heads into one **plus** projects through a low-rank bottleneck
+> that drops the head dim entirely. For very long contexts
+> (`T > 32 k`), the bottleneck gives another factor of ~`head_dim
+> / kv_lora_rank` in cache size, which matters for inference
+> memory.
+
+**Q2. Why didn't HyMo go full MLA?**
+
+> A: Two reasons. First, at 750 M active params the absorbed-MLA
+> kernel (which needs extra matmuls to project through the
+> low-rank bottleneck at attention time) is not a clear win on
+> quality-per-FLOPs vs. MQA-4. Second, the absorbed-MLA kernel
+> is harder to write in pure PyTorch + Triton than the MQA-4
+> kernel; HyMo's kernel budget didn't include it. The
+> `kv_lora_rank = 128` field is set up so a future v1.2 could
+> flip to full MLA absorption without changing the config shape.
+
+**Q3. Why is the partial RoPE only on the first 25% of
+`head_dim`?**
+
+> A: Empirically, RoPE on the full `head_dim` works but is
+> over-parameterized; 25% gives the position-aware channels
+> enough rope to learn relative-position patterns without
+> burning 75% of the head dim on position encoding (which
+> would otherwise compete with content attention). See
+> `model-architecture.md`.
+
+**Q4. What does "absorbed" mean in MLA?**
+
+> A: The trick that the latent `c_t` can be the only thing
+> stored in the KV cache (instead of per-head `k_t`, `v_t`).
+> The per-head projections `W_K_B`, `W_V_B` are folded into the
+> query projection at training time, so at inference, attention
+> reads `c_t` directly and the per-head `k_t`, `v_t` are
+> reconstructed on the fly. HyMo doesn't do this folding yet;
+> see `optimization.md` for the future work.
+
+**Q5. MQA-4 vs GQA-1.75 — what's the difference?**
+
+> A: GQA-1.75 (an earlier draft of HyMo's config) means the
+> ratio `n_heads / n_kv_groups = 1.75` — but `1.75` isn't an
+> integer, so it was a placeholder for "not yet decided".
+> MQA-4 is `n_kv_groups = 4`, so the ratio is `16 / 4 = 4`.
+> Ablation family D (`D_mqa4_vs_gqa175`) compares these.
+
+#### Cross-links
+
+- [`model-architecture.md`(model-architecture.md) §4 — the
+  MLA block walkthrough.
+- [`concepts/model-architecture.md`](model-architecture.md) —
+  partial RoPE on the first 25% of `head_dim`.
+- [`concepts/gdn-and-mla.md`](gdn-and-mla.md) —
+  why MLA + GDN, not just MLA.
+
+
+### Learning objectives
+
+After this file, you can:
+
+1. State Rotary Position Embeddings (RoPE) and how they preserve
+   relative position through a rotation.
+2. Explain HyMo's "partial RoPE" choice (25% of `head_dim`).
+3. Describe the NoPE-hybrid ablation (no PE on select GDN
+   layers) and why it's deferred to v1.1.
+
+### Intuition
+
+The attention score between query `q_i` and key `k_j` depends on
+the *content* of `q_i` and `k_j`. Without position information,
+the model cannot distinguish "the cat sat on the mat" from
+"mat the on sat cat the" — same tokens, different order.
+
+Two main approaches:
+
+| Approach | What it stores | Compute cost |
+|---|---|---|
+| **Absolute position embeddings** | A learned vector per position, added to the token embedding. | One extra `vocab_size + max_seq_len` embedding table. |
+| **RoPE (Su et al. 2021)** | A learned rotation per head, applied to `q` and `k` per position. | Per-position rotation; no extra parameters. |
+| **NoPE (no position encoding)** | None — the model has no explicit position signal. | Zero overhead. |
+
+RoPE is the modern default. It encodes relative position
+through an angle: at position `p`, query/key vectors are
+rotated by an angle `p · θ_k` where `θ_k` is a per-dim
+frequency. The attention score after rotation depends only on
+the relative position `(i - j)`, not on the absolute
+positions.
+
+**Partial RoPE**: instead of applying RoPE to the full
+`head_dim`, apply it to only the first `qk_rope_head_dim` of it.
+The remaining `qk_nope_head_dim = head_dim - qk_rope_head_dim`
+carries *no* position information.
+
+```python
+# HyMo at production scale:
+# qk_rope_head_dim = 32
+# qk_nope_head_dim = 96
+# head_dim = 128 (= 32 + 96)
+# 25% RoPE, 75% NoPE per head
+```
+
+### Why 25%?
+
+Empirically (DeepSeek-V2, V3; also some Llama ablation work):
+applying RoPE to fewer dimensions improves long-context
+performance. The intuition: the head-dim budget is shared
+between content and position; giving 75% of it to content lets
+each head specialize more. The 25% is enough rope to learn
+relative position patterns.
+
+### The NoPE-hybrid (deferred)
+
+An ablation that disables position encoding on **select GDN
+layers** — specifically, the GDN layer immediately after each
+MLA layer. The 7 affected positions for an 8-MLA stack are
+`{3, 7, 11, 15, 19, 23, 27}`.
+
+Why? A GDN layer with no position information relies entirely
+on its recurrence to track "where" tokens are. The
+MLA-then-GDN sandwich is a natural place to test this — the
+MLA layer has its own position info (rotated by partial RoPE),
+and the GDN that follows can either reuse it (via the hidden
+state) or have no position info at all. The ablation family
+`D_mqa4_vs_gqa175` and the NoPE-hybrid flag
+(`nope_hybrid_gdn_enabled: false` in v1.0) are what gate this.
+
+The risk was that "no position" hurts the model. The mitigation
+in v1.0 is simple: ship with the flag **off** (everyone gets
+partial RoPE), defer the test to v1.1.
+
+### Math derivation
+
+### RoPE
+
+A 2D rotation by angle `θ`:
+
+```
+R(θ) = [cos θ, -sin θ]
+       [sin θ,  cos θ]
+```
+
+For a `head_dim`-dim vector, RoPE applies a different angle to
+each pair of dimensions. Standard convention:
+
+```
+θ_k = 1 / (rope_theta^(2k / head_dim))     k = 0, 1, ..., head_dim/2 - 1
+```
+
+At position `p`, the rotation per pair is `p · θ_k`. Query `q`
+at position `p`:
+
+```
+q_rot = RoPE(q, p) = [q_0 cos(p θ_0) - q_1 sin(p θ_0),
+                       q_0 sin(p θ_0) + q_1 cos(p θ_0),
+                       q_2 cos(p θ_1) - q_3 sin(p θ_1),
+                       ...]
+```
+
+Same for `k` at position `j`. The attention inner product
+`q_rot · k_rot` depends on `(p - j)` (modulo `2π`), so the
+model learns relative position patterns.
+
+### Partial RoPE
+
+Apply RoPE only to the first `qk_rope_head_dim` of `q` and `k`:
+
+```
+q_rot = [RoPE(q[:32], p),  q[32:]]         # 32 dims rotated, 96 dims not
+k_rot = [RoPE(k[:32], j),  k[32:]]
+```
+
+The remaining `qk_nope_head_dim = 96` dims are vanilla content
+attention. The attention inner product is:
+
+```
+q_rot · k_rot = RoPE(q[:32], p) · RoPE(k[:32], j)
+              + q[32:128] · k[32:128]
+```
+
+The first term has relative-position dependence; the second
+doesn't. This mixing is what gives partial RoPE its quality
+advantage over full RoPE.
+
+### NoPE
+
+Set `qk_rope_head_dim = 0`. The full `head_dim` carries no
+position information. The model must rely on:
+- The previous MLA layer's hidden state (which has its own
+  partial RoPE).
+- The recurrence state of the GDN (which carries implicit
+  position through the cumulative decay).
+- The MoE router (which sees the same hidden state).
+
+Empirically, partial NoPE-hybrid (mixing RoPE and NoPE across
+layers) is competitive with full RoPE on most tasks but
+*better* on long-context benchmarks. The v1.1 ablation will
+test this.
+
+### Implementation in HyMo
+
+- `src/hymo/models/rope.py:RotaryEmbedding` — `class RotaryEmbedding`.
+- `src/hymo/models/rope.py:RotaryEmbedding.__init__` — `__init__`: precomputes the
+  `cos`, `sin` tables for `max_seq_len` positions and
+  `head_dim / 2` freq pairs.
+- `src/hymo/models/rope.py:RotaryEmbedding.apply_rope` — `apply_rope(x, positions, *,
+  start_pos=0)`: applies the rotation to the first
+  `qk_rope_head_dim` of `x`; leaves the rest unchanged.
+- `src/hymo/models/rope.py:RotaryEmbedding.extra_repr` — `extra_repr`.
+
+Wiring:
+
+- `src/hymo/models/mla.py:MultiHeadLatentAttention.forward` — `forward(x)` calls
+  `apply_rope(q_rope, positions)` for the first
+  `qk_rope_head_dim = 32` of `q` and `k`.
+- `src/hymo/models/gdn.py:GatedDeltaNetBlock.forward` — `forward(x)` calls
+  `apply_rope` on the GDN's `b` and `c` keys (which have the
+  same shape as MLA's `q_rope`).
+- `src/hymo/models/model.py:HyMo.__init__` — for each layer, if
+  `i in nope_hybrid_gdn_positions`, the GDN block is built
+  with `use_rope=False` (no `apply_rope` call).
+
+The `use_rope` flag on `GatedDeltaNetBlock` is set in
+`model.py:HyMo.__init__`:
+
+```python
+for i in range(config.n_layers):
+    if i in mla_positions:
+        self.layers.append(MLABlock(config, layer_idx=i))
+    else:
+        use_rope = i not in nope_hybrid
+        self.layers.append(
+            GatedDeltaNetBlock(config, layer_idx=i, use_rope=use_rope)
+        )
+```
+
+So `nope_hybrid_gdn_enabled: true` means the 7 GDN layers at
+positions `{3, 7, 11, 15, 19, 23, 27}` are GDN-without-RoPE,
+the other 17 GDN layers get partial RoPE.
+
+### Worked example
+
+Production scale (`configs/hymo_750m.yaml`):
+
+- `head_dim = 128`, `qk_rope_head_dim = 32`, `qk_nope_head_dim = 96`
+- `rope_theta = 10_000.0`
+- 32 layers, 8 MLA + 24 GDN
+- `nope_hybrid_gdn_enabled: false` (v1.0 default)
+
+Per-layer positional info:
+
+| Layer | Type | Pos info |
+|---|---|---|
+| 0 | MLA | 32-dim RoPE on `q, k` |
+| 1, 2 | GDN | 32-dim RoPE on `b, c` |
+| 3 | GDN | 32-dim RoPE on `b, c` (NoPE would be here if `nope_hybrid_gdn_enabled: true`) |
+| 4 | MLA | 32-dim RoPE on `q, k` |
+| ... | ... | ... |
+| 28 | MLA | 32-dim RoPE on `q, k` |
+| 29, 30, 31 | GDN | 32-dim RoPE on `b, c` |
+
+If the NoPE-hybrid flag were flipped, layers 3, 7, 11, 15, 19,
+23, 27 would not apply RoPE — the rest of the model looks
+identical.
+
+#### Interview Q&A
+
+**Q1. Why partial RoPE (25%) instead of full RoPE?**
+
+> A: Empirically, full RoPE on 128-dim heads over-allocates
+> capacity to position encoding. 25% gives enough rotational
+> channels to learn relative positions while leaving 75% of
+> the head dim for content signal. This is the DeepSeek-V2/V3
+> choice.
+
+**Q2. Why does the NoPE-hybrid defer to v1.1?**
+
+> A: Risk reduction. The shipped model is the primary 30 B
+> pre-training run; flipping the NoPE-hybrid flag without a
+> prior ablation result is a multi-day experiment with no
+> guarantee of payoff. The v1.0 ships with the flag off
+> (everyone gets partial RoPE); the v1.1 ablation tests
+> whether the 7 NoPE GDN layers help long-context tasks.
+
+**Q3. Why is `rope_theta = 10_000` and not 500_000 (Llama-3)?**
+
+> A: 10_000 is the original RoPE default; it gives reasonable
+> extrapolation up to ~32 k context. 500_000 is the Llama-3
+> "extended context" choice, which extrapolates to 128 k
+> but adds no quality at the trained context. HyMo trains
+> at `max_seq_len = 4_096`; 10_000 is sufficient for that
+> range without wasted parameter capacity.
+
+**Q4. Why apply RoPE to `b` and `c` in GDN, not just to `q` and
+`k` in MLA?**
+
+> A: The GDN writes-to-state via `b` and reads-from-state via
+> `c`. If `b` and `c` don't carry position information, the
+> model can't write a "memory at position p" or read "memory
+> from position j" — the recurrence becomes position-agnostic,
+> which hurts associative recall. Applying RoPE to `b, c`
+> lets the GDN track timing through the recurrence.
+
+**Q5. Why does `apply_rope` take a `start_pos` argument?**
+
+> A: For inference with KV-cache reuse. When decoding at
+> position `p`, the model only needs the rotation at `p`, not
+> all positions. `start_pos` lets the kernel slice the cos/sin
+> tables without recomputing. Currently `start_pos=0` always
+> (no incremental inference in v1.0), but the argument is
+> there for the v1.1 inference refactor.
+
+**Q6. What's the cost of partial RoPE vs. full RoPE?**
+
+> A: `apply_rope` always slices and rotates the first
+> `qk_rope_head_dim` of the input. Whether that's 32 or 128
+> dims, the cost is one rotation per dim pair (~30 ops per
+> pair). The 75% NoPE portion is "free" — no rotation
+> compute. Net: partial RoPE is *cheaper* than full RoPE.
+
+#### Cross-links
+
+- [`model-architecture.md`](model-architecture.md) §7
+  (RoPE walkthrough).
+- [`model-architecture.md`](model-architecture.md) — how RoPE is
+  applied to MLA's `q` and `k`.
+- [`gdn-and-mla.md`](gdn-and-mla.md) —
+  how RoPE is applied to GDN's `b` and `c`.
+- [`gdn-and-mla.md`](gdn-and-mla.md) —
+  the NoPE-hybrid as an ablation.
+
+
+## References
+
+- [gdn-and-mla.md](gdn-and-mla.md) — the GDN/MLA/MoE/MTP mechanism deep-dives.
+- [optimization.md](optimization.md) — optimizers, scheduler, FSDP-2, init status.
+- [kernels.md](kernels.md) — the Triton GDN kernel.
+- [design.md](design.md) — the full architecture & design document.
+- [training.md](../training.md) — the training pipeline.
+- [config.md](../references/config.md) — the config system reference.
+- Source: `src/hymo/models/model.py`, `src/hymo/models/mla.py`, `src/hymo/models/gdn.py`, `src/hymo/models/rope.py`, `src/hymo/models/moe.py`, `src/hymo/models/mtp.py`, `src/hymo/models/gdn_triton.py`.
+
+*Next: Read [training.md](../training.md) for the data loading, tokenization, and training pipeline.*

@@ -1,7 +1,8 @@
-# 10 — Triton Kernels and `autograd.Function`
+# HyMo — Triton Kernels
 
-> **Bridges to:** [`learning_docs/4_Optimizations.md`](../../learning_docs/4_Optimizations.md) §3
-> (Triton kernel)
+> The GPU execution model, the hand-written Triton GDN kernel (forward + backward), and the
+> `torch.autograd.Function` integration with recompute-style backward. This is the only sanctioned
+> custom kernel in the codebase (`AGENTS.md` engineering rules); there is no `fla` dependency.
 
 ## Learning objectives
 
@@ -83,7 +84,7 @@ across the chunk's iterations. With `S * D = 1024` floats =
 
 ## The chunked GDN algorithm in Triton
 
-Recap from [`concepts/02-linear-attention-gdn.md`](02-linear-attention-gdn.md):
+Recap from [`concepts/gdn-and-mla.md`](gdn-and-mla.md):
 
 ```
 h_t = α_t · h_{t-1} + b_t ⊗ v_t           (write)
@@ -154,25 +155,25 @@ long sequences (`T = 4096`, `n_layers = 24`), this is
 
 ## Implementation in HyMo
 
-- `src/hymo/models/gdn_triton.py:288` (the whole file).
-- `src/hymo/models/gdn_triton.py:23` — `HAS_TRITON` constant.
-- `src/hymo/models/gdn_triton.py:30` — `_next_power_of_2(n)`.
-- `src/hymo/models/gdn_triton.py:43` — `@triton.jit gdn_fwd_kernel`.
-- `src/hymo/models/gdn_triton.py:94` — `@triton.jit gdn_bwd_kernel`.
-- `src/hymo/models/gdn_triton.py:174` — `class TritonGDNFunction
+- `src/hymo/models/gdn_triton.py` (the whole file).
+- `src/hymo/models/gdn_triton.py` — `HAS_TRITON` constant.
+- `src/hymo/models/gdn_triton.py:_next_power_of_2` — `_next_power_of_2(n)`.
+- `src/hymo/models/gdn_triton.py:gdn_fwd_kernel` — `@triton.jit gdn_fwd_kernel`.
+- `src/hymo/models/gdn_triton.py:gdn_bwd_kernel` — `@triton.jit gdn_bwd_kernel`.
+- `src/hymo/models/gdn_triton.py:TritonGDNFunction` — `class TritonGDNFunction
   (torch.autograd.Function)`.
-- `src/hymo/models/gdn_triton.py:237` — `triton_gated_delta_rule
+- `src/hymo/models/gdn_triton.py:triton_gated_delta_rule` — `triton_gated_delta_rule
   (v, b, c, g, A_log)`: the Python wrapper.
 
 The wiring in `gdn.py`:
 
-- `src/hymo/models/gdn.py:97` — `_gated_delta_rule`: the eager
+- `src/hymo/models/gdn.py:GatedDeltaNetBlock._gated_delta_rule` — `_gated_delta_rule`: the eager
   PyTorch reference (used in tests, also when
   `use_triton = False`).
-- `src/hymo/models/gdn.py:123` — `forward(x)`: dispatches to
+- `src/hymo/models/gdn.py:GatedDeltaNetBlock.forward` — `forward(x)`: dispatches to
   `triton_gated_delta_rule` if `use_triton`, else to
   `_gated_delta_rule`.
-- `src/hymo/models/gdn.py:130` — `_build_compiled_forward`: the
+- `src/hymo/models/gdn.py:GatedDeltaNetBlock._build_compiled_forward` — `_build_compiled_forward`: the
   `torch.compile`-wrapped forward.
 
 ## Worked example
@@ -278,9 +279,17 @@ BF16?**
 
 ## Cross-links
 
-- [`learning_docs/4_Optimizations.md`](../../learning_docs/4_Optimizations.md) §3
+- [`optimization.md`](optimization.md) §3
   (Triton kernel integration).
-- [`concepts/02-linear-attention-gdn.md`](02-linear-attention-gdn.md) —
+- [`concepts/gdn-and-mla.md`](gdn-and-mla.md) —
   the recurrence that the kernel computes.
-- [`learning_docs/1_Model_Architecture.md`](../../learning_docs/1_Model_Architecture.md) §6
+- [`model-architecture.md`](model-architecture.md) §6
   (the Triton kernel call site).
+
+## References
+
+- [gdn-and-mla.md](gdn-and-mla.md) — the recurrence the kernel computes.
+- [model-architecture.md](model-architecture.md) — the GDN block call site (`gdn.py`).
+- [optimization.md](optimization.md) — the `fused_gdn` flag and `torch.compile` interaction.
+- [training.md](../training.md) — how the kernel threads through the trainer.
+- Source: `src/hymo/models/gdn_triton.py` (`gdn_fwd_kernel`, `gdn_bwd_kernel`, `TritonGDNFunction`, `triton_gated_delta_rule`), `src/hymo/models/gdn.py`.

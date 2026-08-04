@@ -1,4 +1,4 @@
-# HyMo Config System — Code Walkthrough
+# HyMo — Configuration Reference
 
 > **Prerequisite reading:** none. This is the first doc to read if you want
 > to understand a `configs/hymo_750m.yaml` field.
@@ -8,9 +8,9 @@
 > - `src/hymo/core/config_validation.py` — cross-field invariant checks
 > - `src/hymo/core/types.py` — semantic newtypes
 >
-> **Companion concepts:** see [`docs/concepts/06-mup-init.md`](../docs/concepts/06-mup-init.md) for why every
-> field exists, [`docs/concepts/08-wsd-scheduler.md`](../docs/concepts/08-wsd-scheduler.md) for the scheduler
-> fractions, [`docs/concepts/07-muon-optimizer.md`](../docs/concepts/07-muon-optimizer.md) for the optimizer
+> **Companion concepts:** see [`optimization.md`](../concepts/optimization.md) for why every
+> field exists, [`optimization.md`](../concepts/optimization.md) for the scheduler
+> fractions, [`optimization.md`](../concepts/optimization.md) for the optimizer
 > hyperparameters.
 
 ---
@@ -198,7 +198,7 @@ class OptimizerConfig:
 | `master_weights_dtype in {"float32", "bfloat16"}` | `ValueError` |
 
 The `cautious_wd: bool = True` flag drives the cautious-mask logic in
-`CautiousAdamW.step` (see `concepts/07-muon-optimizer.md`).
+`CautiousAdamW.step` (see `concepts/optimization.md`).
 
 ### 2.3 `SchedulerConfig` (line 193)
 
@@ -299,9 +299,9 @@ where `SchedulerConfig.total_steps = 57_220` comes from.
 
 | Flag | Threads to | Default | See |
 |---|---|---|---|
-| `fused_gdn` | `GatedDeltaNetBlock.use_triton` | True | `learning_docs/4_Optimizations.md` §GDN kernel |
-| `moe_mixed_precision` | `DeepSeekMoE.use_mixed_precision` | True | `learning_docs/4_Optimizations.md` §MoE |
-| `torch_compile_gdn` | `GatedDeltaNetBlock.use_compile` | True | `learning_docs/4_Optimizations.md` §torch.compile |
+| `fused_gdn` | `GatedDeltaNetBlock.use_triton` | True | `optimization.md` §GDN kernel |
+| `moe_mixed_precision` | `DeepSeekMoE.use_mixed_precision` | True | `optimization.md` §MoE |
+| `torch_compile_gdn` | `GatedDeltaNetBlock.use_compile` | True | `optimization.md` §torch.compile |
 
 All three are wired in `Trainer._thread_optimization_flags`
 (`src/hymo/training/trainer.py`) at construction time. (The
@@ -471,7 +471,7 @@ def derive_config(base, *, model=None, optimizer=None, scheduler=None,
 
 This is the function the eval/ablation framework was going to use; the
 in-repo `ablations/` package was removed in the 2026-08-04 cleanup (see
-`learning_docs/5_Evaluation_and_Ablations.md` §2).
+`../training.md` §2).
 
 ---
 
@@ -529,8 +529,8 @@ from hymo.core.config import derive_config
 ablation = derive_config(config, model=derive_config.model)  # actually use replace(ModelConfig, ...)
 ```
 
-See `learning_docs/1_Model_Architecture.md` for step 3, and
-`learning_docs/3_Training_Pipeline.md` for steps 4–5.
+See `model-architecture.md` for step 3, and
+`../training.md` for steps 4–5.
 
 ---
 
@@ -597,7 +597,7 @@ classes?**
 > losslessly encoded as a sequence of bytes, so the model can never
 > produce an `OOV` (out-of-vocabulary) token. The combined 64,256 is
 > what the tokenizer's `ExtendedTokenizer` emits (see
-> `learning_docs/2_Data_Pipeline.md` §Tokenizer).
+> `../training.md` §Tokenizer).
 
 **Q5. Where does the `57,220` step count come from?**
 
@@ -623,16 +623,11 @@ classes?**
 
 ---
 
-## 9. Cross-links
+## References
 
-- Walkthrough: `learning_docs/1_Model_Architecture.md` §3 (model),
-  `learning_docs/3_Training_Pipeline.md` §Optimizer & §Scheduler.
-- Concepts: `docs/concepts/06-mup-init.md` (μP knobs),
-  `docs/concepts/07-muon-optimizer.md` (optimizer knobs),
-  `docs/concepts/08-wsd-scheduler.md` (scheduler fractions),
-  `docs/concepts/09-fsdp2.md` (training flags).
-- Validation: `src/hymo/core/config_validation.py` for the cross-field
-  checks.
-- Config derivation: `hymo.core.config.derive_config` — the
-  `dataclasses.replace`-based helper (the in-repo `ablations/` package was
-  removed in the 2026-08-04 cleanup).
+- [api.md](api.md) — the model + trainer API surface.
+- [../concepts/model-architecture.md](../concepts/model-architecture.md) — the model walkthrough.
+- [../concepts/optimization.md](../concepts/optimization.md) — optimizer/scheduler/FSDP mechanics and init status.
+- [../training.md](../training.md) — the training pipeline.
+- [../guides/quickstart.md](../guides/quickstart.md) — the 30-second start.
+- Source: `src/hymo/core/config.py` (`ModelConfig`, `OptimizerConfig`, `SchedulerConfig`, `TrainingConfig`, `RunConfig`, `HyMoConfig`, `load_config`, `save_config`, `derive_config`), `src/hymo/core/config_validation.py` (`validate_full_config`), `src/hymo/core/types.py`.

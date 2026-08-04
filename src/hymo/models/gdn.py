@@ -1,12 +1,14 @@
 """Gated Delta Net block (architecture doc §2.3).
 
 Implements the GDN linear-attention recurrence in pure-PyTorch.
-Can fall back to a fused Triton kernel if `fla` is installed.
+The fused Triton kernel (``hymo.models.gdn_triton``) is the sanctioned
+fast path on CUDA; ``fused_gdn`` in the training config selects it.
 """
 
 from __future__ import annotations
 
-from typing import Callable, cast
+from collections.abc import Callable
+from typing import cast
 
 import torch
 from torch import nn
@@ -28,6 +30,12 @@ class GatedDeltaNetBlock(nn.Module):
         self.layer_idx = layer_idx
         self.use_rope = use_rope
         self._config = config
+
+        # Optimization flags, defaulting to the design intent (config defaults).
+        # The Trainer threads ``training.fused_gdn`` / ``torch_compile_gdn``
+        # here; blocks built standalone keep the on-by-default behaviour.
+        self.use_triton = True
+        self.use_compile = True
 
         d_model = config.dim
         d_inner = config.gdn_d_inner
@@ -114,7 +122,7 @@ class GatedDeltaNetBlock(nn.Module):
 
     def forward(self, x: torch.Tensor) -> torch.Tensor:
         """Forward pass for the GDN block mapping (B, T, d_model) -> (B, T, d_model)."""
-        if x.is_cuda:
+        if x.is_cuda and self.use_compile:
             return self._forward_compiled(self, x)
         return self._forward_eager(x)
 
@@ -130,6 +138,26 @@ class GatedDeltaNetBlock(nn.Module):
         if not torch.cuda.is_available():
             return cls._forward_eager
         return torch.compile(cls._forward_eager)
+
+    def _kernel_out(
+        self,
+        v: torch.Tensor,
+        b: torch.Tensor,
+        c: torch.Tensor,
+        decay: torch.Tensor,
+    ) -> torch.Tensor:
+        """Run the fused GDN recurrence via the sanctioned Triton kernel.
+
+        Fail-fast: on CUDA with fused_gdn enabled, a kernel failure must
+        surface as an error rather than silently degrading to the eager
+        recurrence (AGENTS.md hard don't). The eager path is a CPU/reference
+        fallback only.
+        """
+        if self.use_triton and v.is_cuda:
+            from hymo.models.gdn_triton import triton_gated_delta_rule
+
+            return triton_gated_delta_rule(v, b, c, decay, self.A_log)
+        return self._gated_delta_rule(v, b, c, decay)
 
     def _forward_eager(self, x: torch.Tensor) -> torch.Tensor:
         B, T, _ = x.shape
@@ -159,15 +187,7 @@ class GatedDeltaNetBlock(nn.Module):
             v_for_rope = v_for_rope.permute(0, 2, 1, 3)
             v = torch.cat([v_for_rope, v[..., rope_dim:]], dim=-1)
 
-        try:
-            from fla.layers.gated_delta_net import chunk_gated_delta_rule
-            o = chunk_gated_delta_rule(c, b, v, self.A_log, decay, self.chunk_size)
-        except Exception:
-            try:
-                from hymo.models.gdn_triton import triton_gated_delta_rule
-                o = triton_gated_delta_rule(v, b, c, decay, self.A_log)
-            except Exception:
-                o = self._gated_delta_rule(v, b, c, decay)
+        o = self._kernel_out(v, b, c, decay)
 
         o = o + self.D.view(1, 1, H, 1) * v
         o = o * g_gate.unsqueeze(-1)

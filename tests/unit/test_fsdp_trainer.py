@@ -97,6 +97,51 @@ class TestTrainer:
         assert trainer.step == 1
         assert trainer.token_count == B * T
 
+    def test_train_step_updates_moe_gate_bias(self, tiny_hymo_config) -> None:
+        """EMA load-balancing must run once per optimizer step (was never wired)."""
+        from hymo.models.moe import DeepSeekMoE
+
+        model = HyMo(tiny_hymo_config.model)
+        trainer = Trainer(tiny_hymo_config, model)
+        moes = [m for m in model.modules() if isinstance(m, DeepSeekMoE)]
+        assert len(moes) > 0
+        for moe in moes:
+            assert float(moe.ema_expert_counts.sum()) == 0.0
+
+        B, T = 1, tiny_hymo_config.model.max_seq_len
+        tokens = torch.randint(0, tiny_hymo_config.model.vocab_size, (B, T))
+        targets = torch.randint(0, tiny_hymo_config.model.vocab_size, (B, T))
+        trainer.train_step(tokens, targets)
+
+        for moe in moes:
+            assert float(moe.ema_expert_counts.sum()) > 0.0
+
+    def test_train_step_consumes_optimization_flags(self, tiny_hymo_config) -> None:
+        """Trainer must thread fused_gdn/torch_compile_gdn into GDN blocks."""
+        from dataclasses import replace
+
+        from hymo.models.gdn import GatedDeltaNetBlock
+
+        model = HyMo(tiny_hymo_config.model)
+        config = replace(
+            tiny_hymo_config,
+            training=replace(
+                tiny_hymo_config.training,
+                fused_gdn=False,
+                torch_compile_gdn=False,
+            ),
+        )
+        trainer = Trainer(config, model)
+        B, T = 1, tiny_hymo_config.model.max_seq_len
+        tokens = torch.randint(0, tiny_hymo_config.model.vocab_size, (B, T))
+        targets = torch.randint(0, tiny_hymo_config.model.vocab_size, (B, T))
+        trainer.train_step(tokens, targets)
+
+        for block in model.modules():
+            if isinstance(block, GatedDeltaNetBlock):
+                assert block.use_triton is False
+                assert block.use_compile is False
+
     def test_save_and_load(self, tiny_hymo_config, tmp_path) -> None:
         from dataclasses import replace
         config = replace(tiny_hymo_config, run=replace(tiny_hymo_config.run, output_dir=str(tmp_path)))

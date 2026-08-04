@@ -12,7 +12,6 @@ import torch
 from torch import nn
 from torch.nn import functional as F
 
-
 __all__ = ["get_val_batch", "compute_validation_loss", "ValMetrics"]
 
 

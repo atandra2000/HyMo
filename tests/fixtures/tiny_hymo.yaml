@@ -3,7 +3,7 @@
 model:
   vocab_size: 1024
   max_seq_len: 64
-  n_layers: 4                  # 1 MLA + 3 GDN at positions {0, 4, 8, 12} -- wait, 4 layers
+  n_layers: 4                  # 1 MLA + 3 GDN (mla_positions = {0})
   dim: 48
   tie_embeddings: true
   n_heads: 4

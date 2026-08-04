@@ -7,7 +7,7 @@ from pathlib import Path as _Path
 import pytest
 import torch
 
-from hymo.core.config import ModelConfig, load_config
+from hymo.core.config import HyMoConfig, ModelConfig, load_config
 from hymo.models import (
     DeepSeekMoE,
     DenseFFN,
@@ -290,6 +290,25 @@ class TestMoE:
         assert y.shape == x.shape
         assert torch.isfinite(y).all()
 
+    def test_mixed_precision_dispatch_matches_default(self) -> None:
+        """BF16 expert dispatch must not change routing or output shape."""
+        torch.manual_seed(0)
+        m = ModelConfig()
+        moe = DeepSeekMoE(m, layer_idx=0)
+        x = torch.randn(2, 8, m.dim)
+
+        moe.use_mixed_precision = False
+        y_default = moe(x)
+        ind_default = moe._last_indices.clone()
+
+        moe.use_mixed_precision = True
+        y_mixed = moe(x)
+        ind_mixed = moe._last_indices.clone()
+
+        assert y_mixed.shape == y_default.shape == (2, 8, m.dim)
+        assert torch.equal(ind_mixed, ind_default)
+        assert torch.isfinite(y_mixed).all()
+
 
 class TestSwiGLUExpert:
     """Verify SwiGLU expert weights and projection dimension constraints."""
@@ -346,7 +365,7 @@ class TestMTP:
         assert len(mtp.mtp_modules) == 0
 
     def test_forward_returns_chained_heads(self) -> None:
-        from hymo.models.fusionllm import HyMo
+        from hymo.models.model import HyMo
 
         m = ModelConfig()
         model = HyMo(m)

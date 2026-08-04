@@ -72,6 +72,10 @@ class DeepSeekMoE(nn.Module):
         nn.init.zeros_(self.gate.bias)
         nn.init.normal_(self.gate.weight, std=0.006)
 
+        # Mixed-precision dispatch (design §12a.2): int16 scatter-add indices
+        # + BF16 expert matmuls when the flag is on (default per config).
+        self.use_mixed_precision = True
+
         self.experts = nn.ModuleList(
             [SwiGLUExpert(config.dim, self.moe_inter_dim) for _ in range(self.n_routed)]
         )
@@ -129,6 +133,16 @@ class DeepSeekMoE(nn.Module):
         capacity = int(self.capacity_factor * (B * T * k) / self.n_routed)
         capacity = max(capacity, 1)
 
+        # Mixed-precision dispatch (design §12a.2): cast the expert input to
+        # the expert weight dtype so matmuls run in that precision. Under
+        # FSDP-BF16 the weights are already BF16 -> dispatch halves the input
+        # bandwidth; on CPU (FP32 weights) this is a no-op.
+        x_experts = (
+            x_flat.to(self.experts[0].w1.weight.dtype)
+            if self.use_mixed_precision
+            else x_flat
+        )
+
         for e in range(self.n_routed):
             e_mask = (top_indices == e)
             flat_mask = e_mask.any(dim=-1).reshape(-1)
@@ -142,7 +156,7 @@ class DeepSeekMoE(nn.Module):
                 ~e_mask, 0.0
             ).sum(dim=-1).reshape(-1)
             w_e = w_e[sel].unsqueeze(-1)
-            y_e = self.experts[e](x_flat[sel])
+            y_e = self.experts[e](x_experts[sel])
             y_e = y_e.to(out.dtype)
             out.index_add_(0, sel, y_e * w_e.to(out.dtype))
 

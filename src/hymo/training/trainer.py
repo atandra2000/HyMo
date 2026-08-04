@@ -52,13 +52,16 @@ class Trainer:
     ) -> None:
         self._config = config
         self.model = model
+        self._thread_optimization_flags()
 
         import os
+
         import torch.distributed as dist
         _wandb_disabled = os.environ.get("WANDB_MODE", "").lower() in ("disabled", "offline", "dryrun")
         if not _wandb_disabled and (not dist.is_initialized() or dist.get_rank() == 0):
-            import wandb
             import dataclasses
+
+            import wandb
             cfg_dict = dataclasses.asdict(config) if dataclasses.is_dataclass(config) else {}
             wandb.init(
                 project="HyMo",
@@ -84,6 +87,29 @@ class Trainer:
             self._has_mtp = True
         else:
             self._has_mtp = False
+
+    def _thread_optimization_flags(self) -> None:
+        """Push training-config optimization toggles onto the model blocks.
+
+        GDN blocks select the Triton kernel / torch.compile via
+        ``fused_gdn`` / ``torch_compile_gdn``; MoE blocks toggle the
+        mixed-precision dispatch via ``moe_mixed_precision``; MLA blocks
+        toggle CUDA-Graph capture via ``cuda_graphs_mla``. Blocks built
+        standalone default everything on (design intent).
+        """
+        from hymo.models.gdn import GatedDeltaNetBlock
+        from hymo.models.mla import MLABlock
+        from hymo.models.moe import DeepSeekMoE
+
+        t = self._config.training
+        for module in self.model.modules():
+            if isinstance(module, GatedDeltaNetBlock):
+                module.use_triton = t.fused_gdn
+                module.use_compile = t.torch_compile_gdn
+            elif isinstance(module, DeepSeekMoE):
+                module.use_mixed_precision = t.moe_mixed_precision
+            elif isinstance(module, MLABlock):
+                module.use_cuda_graphs = t.cuda_graphs_mla
 
     def train_step(
         self,
@@ -161,6 +187,8 @@ class Trainer:
             if self.optimizers.nor_muon is not None:
                 self.optimizers.nor_muon.step()
             self.optimizers.adamw.step()
+
+            self._update_moe_gate_biases()
 
             self.scheduler.step()
             self.model.zero_grad(set_to_none=True)
@@ -297,6 +325,14 @@ class Trainer:
             "val_loss": metrics.loss,
             "val_ppl": metrics.ppl,
         }
+
+    def _update_moe_gate_biases(self) -> None:
+        """Apply EMA load-balancing to every MoE gate (aux-loss-free routing)."""
+        from hymo.models.moe import DeepSeekMoE
+
+        for module in self.model.modules():
+            if isinstance(module, DeepSeekMoE):
+                module.update_gate_bias()
 
     def _current_lr_muon(self) -> float:
         if self.optimizers.nor_muon is not None and len(self.optimizers.nor_muon.param_groups) > 0:

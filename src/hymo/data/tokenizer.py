@@ -11,7 +11,6 @@ from tokenizers import Tokenizer, pre_tokenizers
 from tokenizers.models import BPE
 from tokenizers.trainers import BpeTrainer
 
-
 __all__ = ["ExtendedTokenizer", "BYTE_VOCAB_SIZE", "train_bpe_tokenizer"]
 
 BYTE_VOCAB_SIZE = 256

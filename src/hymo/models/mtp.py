@@ -15,7 +15,7 @@ from torch.nn import functional as F
 from hymo.core.config import ModelConfig
 
 if TYPE_CHECKING:
-    from hymo.models.fusionllm import HyMo
+    from hymo.models.model import HyMo
 
 __all__ = ["MultiTokenPrediction", "MTPOutput"]
 

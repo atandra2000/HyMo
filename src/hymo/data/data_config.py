@@ -14,7 +14,6 @@ import yaml
 
 from hymo.core.types import Path as PathType
 
-
 __all__ = [
     "DataConfig",
     "SourceSpec",
@@ -161,9 +160,6 @@ class DataConfig:
             if s.id == source_id:
                 return s
         raise KeyError(f"Source {source_id!r} not in mixture")
-
-
-from dataclasses import asdict
 
 
 def _build_data_config(raw: dict[str, Any]) -> DataConfig:

@@ -46,15 +46,15 @@ def wrap_model_with_fsdp(
         mp_dtype = torch.bfloat16
     elif config.fsdp_mixed_precision == "float16":
         mp_dtype = torch.float16
-        
+
     mixed_precision = MixedPrecision(
         param_dtype=mp_dtype,
         reduce_dtype=mp_dtype,
         buffer_dtype=mp_dtype,
     )
-    
+
     device_id = torch.cuda.current_device() if torch.cuda.is_available() else None
-    
+
     return FSDP(
         model,
         auto_wrap_policy=auto_wrap_policy,

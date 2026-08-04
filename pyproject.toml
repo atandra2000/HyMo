@@ -38,8 +38,6 @@ dependencies = [
     "pyyaml>=6.0",
     "tokenizers>=0.19",
     "datasets>=2.20",
-    "safetensors>=0.4",
-    "huggingface-hub>=0.24",
 ]
 
 [project.optional-dependencies]

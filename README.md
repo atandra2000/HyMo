@@ -75,7 +75,7 @@ cd hymo
 uv sync --all-extras
 ```
 
-Core dependencies: PyTorch ≥ 2.5, NumPy, PyYAML, HuggingFace `tokenizers` + `datasets`, `safetensors`.
+Core dependencies: PyTorch ≥ 2.5, NumPy, PyYAML, HuggingFace `tokenizers` + `datasets`.
 
 Optional extras:
 - `train` — Triton (Linux), `lm-eval`, `wandb`

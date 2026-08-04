@@ -53,22 +53,24 @@ def run_all(
 ) -> EvalSuiteResult:
     """Run the 6-eval suite and write results to JSON."""
     device = next(model.parameters()).device
-    lm_eval_tasks: list[str] = []
-    for task, _n_shot in EVAL_SUITE:
-        if task != "fineweb_edu_ppl":
-            lm_eval_tasks.append(task)
+    eval_tasks = [(task, n_shot) for task, n_shot in EVAL_SUITE if task != "fineweb_edu_ppl"]
 
     harness_results: dict[str, EvalResult] = {}
-    if lm_eval_tasks:
+    if eval_tasks:
         try:
-            harness_results = run_harness_eval(
-                model=model,
-                tokenizer=tokenizer,
-                tasks=lm_eval_tasks,
-                batch_size=batch_size,
-            )
+            # run_harness_eval takes a single num_fewshot; run each task with
+            # its own fewshot count so mmlu=5 / gsm8k=8 are actually applied.
+            for task, n_shot in eval_tasks:
+                result = run_harness_eval(
+                    model=model,
+                    tokenizer=tokenizer,
+                    tasks=[task],
+                    num_fewshot=n_shot,
+                    batch_size=batch_size,
+                )
+                harness_results[task] = result[task]
         except ImportError:
-            for task in lm_eval_tasks:
+            for task, _ in eval_tasks:
                 harness_results[task] = EvalResult(
                     task=task, metric="error", value=float("nan"),
                 )

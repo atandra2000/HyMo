@@ -1,4 +1,4 @@
-# HyMo — Documentation Map
+# HyMo — Documentation Index
 
 > Reading-order guide for the HyMo documentation (canonical layout:
 > `concepts/` for theory and architecture, `references/` for API + config,

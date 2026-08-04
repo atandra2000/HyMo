@@ -122,9 +122,9 @@ All hyperparameters live in YAML configs under `configs/`. The primary config is
 | `optimizer` | `OptimizerConfig` | NorMuon LR 0.02, AdamW LR 3e-4, FP32 master weights, cautious WD |
 | `scheduler` | `SchedulerConfig` | WSD schedule, ~57.2k total steps, 2% warmup, linear decay |
 | `training` | `TrainingConfig` | Micro-batch 4, grad accum 8, FSDP BF16, eval every 2k steps |
-| `run` | `RunConfig` | Seed 42, deterministic, distributed |
+| `run` | `RunConfig` | Name + output directory |
 
-Derive ablation configs via `hymo.core.config.derive_config()` — see the [ablation framework](src/hymo/ablations/__init__.py).
+Derive config variants via `hymo.core.config.derive_config()` (e.g. `dataclasses.replace` on sub-configs).
 
 ---
 
@@ -137,12 +137,9 @@ hymo/
 │   └── hymo_mixture.yaml     # Data mixture config
 ├── src/hymo/
 │   ├── core/                 # Config dataclasses, types, exceptions, validation (PyTorch-free)
-│   ├── models/               # GDN, MLA, MoE, MTP, RoPE, μP init, Triton kernel
+│   ├── models/               # GDN, MLA, MoE, MTP, RoPE, Triton kernel
 │   ├── training/             # Trainer, dual optimizer, WSD scheduler, FSDP-2, checkpoint
-│   ├── data/                 # Tokenizer, 10 source loaders, sharding pipeline
-│   ├── eval/                 # lm-eval harness, baselines, comparison runner
-│   ├── ablations/            # Config derivation for systematic ablations
-│   └── utils/                # Seeding, dtype helpers, atomic writes, JSONL metrics logging
+│   └── data/                 # Tokenizer + held-out validation-set builder
 ├── tests/
 │   ├── unit/                 # Module-level unit tests
 │   ├── integration/          # Cross-module integration tests

@@ -96,9 +96,6 @@ class TestOptimizerConfigDefaults:
     def test_adamw_betas(self) -> None:
         assert OptimizerConfig().adamw_betas == (0.9, 0.95)
 
-    def test_master_weights_dtype_default(self) -> None:
-        assert OptimizerConfig().master_weights_dtype == "float32"
-
     def test_cautious_wd_default(self) -> None:
         assert OptimizerConfig().cautious_wd is True
 
@@ -155,10 +152,6 @@ class TestTrainingConfigDefaults:
         assert t.fused_gdn is True
         assert t.moe_mixed_precision is True
         assert t.torch_compile_gdn is True
-        assert t.cuda_graphs_mla is True
-
-    def test_consecutive_nan_limit_5(self) -> None:
-        assert TrainingConfig().consecutive_nan_limit == 5
 
 
 class TestFrozenDataclasses:
@@ -218,10 +211,6 @@ class TestValidation:
         with pytest.raises(ValueError):
             SchedulerConfig(warmup_frac=0.01, stable_frac=0.83, decay_frac=0.15)
 
-    def test_master_weights_dtype_must_be_known(self) -> None:
-        with pytest.raises(ValueError):
-            OptimizerConfig(master_weights_dtype="float128")
-
     def test_decay_must_be_known(self) -> None:
         with pytest.raises(ValueError):
             SchedulerConfig(decay="exponential")
@@ -234,10 +223,6 @@ class TestValidation:
         with pytest.raises(ValueError):
             RunConfig(name="")
 
-    def test_seed_must_be_nonneg(self) -> None:
-        with pytest.raises(ValueError):
-            RunConfig(seed=-1)
-
 
 class TestYamlRoundTrip:
     """Verify loading from and writing to YAML files."""
@@ -245,7 +230,6 @@ class TestYamlRoundTrip:
     def test_loads_default_yaml(self) -> None:
         config = load_config(FIXTURES / "tiny_hymo.yaml")
         assert config.model.n_layers == 4
-        assert config.run.seed == 42
 
     def test_production_yaml_loads(self) -> None:
         config = load_config(Path("configs/hymo_750m.yaml"))
@@ -287,10 +271,9 @@ class TestDerivation:
         c = HyMoConfig()
         c2 = derive_config(
             c,
-            run=RunConfig(name="hymo-ablation-A", seed=123),
+            run=RunConfig(name="hymo-ablation-A"),
         )
         assert c2.run.name == "hymo-ablation-A"
-        assert c2.run.seed == 123
         assert c2.model.n_layers == 32
 
     def test_derive_returns_new_instance(self) -> None:

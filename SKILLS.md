@@ -39,36 +39,56 @@ All knobs are frozen dataclasses in `hymo.core.config`. Derive variants with
 from hymo.core.config import load_config, derive_config
 
 base = load_config("configs/hymo_750m.yaml")
-ablation = derive_config(base, moe_routed_experts=8)  # example; see ablations/
+ablation = derive_config(base, moe_routed_experts=8)  # dataclasses.replace-based
 ```
 
-Ablation families are documented under `src/hymo/ablations/`.
+Config variants derive via `hymo.core.config.derive_config` (the in-repo `ablations/` package was removed in the 2026-08-04 cleanup).
 
 ## Skill 4: Launch FSDP-2 pretraining
 
 Primary config: `configs/hymo_750m.yaml`. Target: 30B tokens on 4× A100 80GB.
 
-```bash
-cd LLM/HyMo
-# single-node smoke (tiny config):
-uv run python -m hymo.training.train --config configs/hymo_750m.yaml --dry-run
+> **Note:** `hymo.training.train` does not exist as a module. The training
+> loop is the `Trainer` class in `src/hymo/training/trainer.py`; you wire it
+> from a small driver script (e.g. `scripts/pretrain.py`, or a notebook).
+> The CLI pattern below is illustrative — adapt the entry point to your
+> driver.
 
-# multi-GPU (production):
-torchrun --nproc_per_node=4 -m hymo.training.train --config configs/hymo_750m.yaml
+```python
+import torch
+from hymo import load_config, build_hymo
+from hymo.training import Trainer
+
+config = load_config("configs/hymo_750m.yaml")
+model = build_hymo(config)
+trainer = Trainer(config, model)
+
+for step in range(config.scheduler.total_steps):
+    # ... fetch (tokens, targets) from your data loader
+    result = trainer.train_step(tokens, targets)
+    if result.is_update and step % config.training.save_interval == 0:
+        trainer.save()
 ```
 
 Checkpoints use DCP (distributed checkpoint) with full RNG + optimizer state.
-Resume from an arbitrary step via `--resume path/to/step_N`.
+Resume from an arbitrary step via `trainer.load("checkpoints/pretrain/step_N")`.
 
-## Skill 5: Wire the shared data pipeline
+## Skill 5: Wire the data pipeline
 
-HyMo uses its own BPE-64k + 256-byte tokenizer (vocab 64,256). Corpus prep can
-reuse `LLM/shared_data/` for download, dedup, and shard format — then tokenize
-with HyMo's shim in `data/prepare_data.py`. See `LLM/shared_data/README.md`
-for mixture weights and manifest schema.
+HyMo uses its own BPE-64k + 256-byte tokenizer (vocab 64,256 — see
+`src/hymo/data/tokenizer.py::ExtendedTokenizer`). Source loaders in
+`src/hymo/data/sources.py` provide 10 streams: `load_fineweb_edu`,
+`load_fineweb`, `load_stack_python`, `load_stack_java`, `load_stack_cpp`,
+`load_slimpajama`, `load_dclm_baseline`, `load_dolma_wiki`,
+`load_dolma_books`, `load_cosmopedia`.
 
-After changing the mixture or tokenizer, rebuild shards and bump the manifest
-version before starting a new run.
+> **Note:** `data/prepare_data.py` is a **pending Roadmap task** (deferred to
+> v1.1). For now, the `ShardWriter` in `src/hymo/data/sharding.py` consumes
+> the source loaders directly; the validation binary is built by
+> `src/hymo/data/prepare_validation.py`.
+
+After changing the mixture or tokenizer, rebuild shards (via
+`ShardWriter`) and bump the manifest version before starting a new run.
 
 ## Skill 6: Debug NaN / OOM during training
 

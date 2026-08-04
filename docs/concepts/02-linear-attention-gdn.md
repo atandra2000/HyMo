@@ -164,7 +164,6 @@ Production scale (from `configs/hymo_750m.yaml`):
 - `gdn_d_state = 32` — the `S` dimension of the state.
 - `gdn_headdim = 32` — the per-head `D` dimension.
 - `gdn_d_inner = 1280` — total inner dim = `n_heads * headdim = 40 * 32`.
-- `gdn_chunk_size = 64` — the chunking for the recurrence.
 
 So the per-head state is `(S, D) = (32, 32) = 1024` floats; per
 block (40 heads) it's `40 * 1024 = 41 K` floats = 164 KB at

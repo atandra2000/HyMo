@@ -7,7 +7,7 @@ project.
 
 - **Raw PyTorch by default; custom Triton kernels are first-party for
   sanctioned hot paths.** Bulk of the codebase (FSDP-2, training
-  loop, data pipeline, eval harness, MTP) stays raw PyTorch. No HF
+  loop, data pipeline, MTP) stays raw PyTorch. No HF
   Trainer, no Lightning. The sanctioned Triton paths are:
   - **Gated Delta Net recurrence** — `src/hymo/models/gdn_triton.py`
     (fused GDN forward + autograd Function with FA2-style
@@ -30,7 +30,7 @@ project.
   implemented. Do not use `NotImplementedError` placeholders unless
   stubbing out future experiments.
 - **No circular dependencies.** The dependency graph is strictly:
-  ``core ← utils ← {models, training, data, eval}``.
+  ``core ← {models, training, data}``.
   ``models`` and ``training`` do not import each other directly; they
   share state through the config.
 - **Triton kernel contract (mirror of `DeepSeek-v3-Lite/AGENTS.md`):**
@@ -46,7 +46,7 @@ project.
 
 - "Build the GDN kernel" → see design §2.3 / roadmap B1
 - "Wire the FSDP-2 wrapper" → see design §13 / roadmap D1-D7
-- "Add a new data source" → see roadmap A3 + ``hymo.data.sources``
+- "Add a new data source" → see roadmap A3 + the workspace ``LLM/shared_data`` pipeline
 - "Write a config for an ablation" → see design §16 / roadmap F1-F4
 
 ## Testing rules (MANDATORY — hardcoded, do not deviate)

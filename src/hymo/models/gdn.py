@@ -90,10 +90,6 @@ class GatedDeltaNetBlock(nn.Module):
     def headdim(self) -> int:
         return self._config.gdn_headdim
 
-    @property
-    def chunk_size(self) -> int:
-        return self._config.gdn_chunk_size
-
     def _gated_delta_rule(
         self,
         v: torch.Tensor,

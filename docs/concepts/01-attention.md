@@ -152,10 +152,8 @@ this scale, the simpler kernel wins.
 - `src/hymo/models/mla.py:143` — `class MLABlock`: pre-norm +
   MultiHeadLatentAttention + residual.
 - `src/hymo/models/mla.py:146` — `__init__(config, layer_idx)`:
-  builds the block; the `use_cuda_graphs` flag is set as an
-  attribute at `mla.py:160` (default True, threaded from
-  `TrainingConfig.cuda_graphs_mla`).
-- `src/hymo/models/mla.py:162` — `forward(x)`: full block
+  builds the block (pre-norm + attention + MoE + residuals).
+- `src/hymo/models/mla.py:160` — `forward(x)`: full block
   forward, including the soft-cap (no — the softcap is on the
   logits, not the attention output; see `model.py:90`).
 

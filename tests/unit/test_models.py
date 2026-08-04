@@ -10,7 +10,6 @@ import torch
 from hymo.core.config import HyMoConfig, ModelConfig, load_config
 from hymo.models import (
     DeepSeekMoE,
-    DenseFFN,
     GatedDeltaNetBlock,
     HyMo,
     MLABlock,
@@ -19,7 +18,6 @@ from hymo.models import (
     MultiTokenPrediction,
     SwiGLUExpert,
     build_hymo,
-    mup_init,
 )
 from hymo.models.rope import RotaryEmbedding
 
@@ -330,21 +328,6 @@ class TestSwiGLUExpert:
         assert torch.isfinite(y).all()
 
 
-class TestDenseFFN:
-    """Verify DenseFFN construct and forward passes."""
-
-    def test_construct(self) -> None:
-        ffn = DenseFFN(dim=64, inter_dim=128)
-        assert ffn.w1.in_features == 64
-        assert ffn.w1.out_features == 128
-
-    def test_forward_shape_and_finite(self) -> None:
-        ffn = DenseFFN(dim=64, inter_dim=128)
-        x = torch.randn(2, 5, 64)
-        y = ffn(x)
-        assert y.shape == (2, 5, 64)
-        assert torch.isfinite(y).all()
-
 
 class TestMTP:
     """Verify Multi-Token Prediction orchestrator and chained modules."""
@@ -548,39 +531,6 @@ class TestBuildHyMo:
         model = build_hymo(config)
         assert isinstance(model, HyMo)
         assert model.config.n_layers == 32
-
-
-class TestMupInit:
-    """Verify maximal update parametrization (muP) scaling works correctly."""
-
-    def test_predicate_zero_keywords(self) -> None:
-        from hymo.models.init import zero_init_predicate
-
-        assert zero_init_predicate("layers.0.attn.gate") is True
-        assert zero_init_predicate("layers.0.g_proj.weight") is True
-        assert zero_init_predicate("layers.0.attn.A_log") is True
-        assert zero_init_predicate("layers.0.gdn.dt_bias") is True
-        assert zero_init_predicate("head.weight") is True
-        assert zero_init_predicate("embed.weight") is True
-        assert zero_init_predicate("layers.0.attn.in_proj.weight") is False
-
-    def test_predicate_handles_embed_d_substring(self) -> None:
-        from hymo.models.init import zero_init_predicate
-
-        assert zero_init_predicate("embed.weight") is True
-        assert zero_init_predicate("layers.5.gdn.D") is True
-
-    def test_mup_init_zeroes_scalars(self, tiny_hymo_model: HyMo) -> None:
-        m = tiny_hymo_model.config
-        mup_init(tiny_hymo_model, m)
-        for name, p in tiny_hymo_model.named_parameters():
-            if "A_log" in name or "dt_bias" in name or ".D" in name:
-                assert torch.allclose(p, torch.zeros_like(p)), name
-        named = dict(tiny_hymo_model.named_parameters())
-        in_proj_name = next(n for n in named if n.endswith("in_proj.weight"))
-        in_proj = named[in_proj_name]
-        assert torch.isfinite(in_proj).all()
-        assert in_proj.std() > 0.0
 
 
 class TestHyMoFromConfig:

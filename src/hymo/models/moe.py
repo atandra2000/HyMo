@@ -1,8 +1,7 @@
-"""Mixture of Experts and DenseFFN (Phase 2).
+"""Mixture of Experts (Phase 2).
 
 Implements DeepSeekMoE with 16 routed experts, 1 shared expert, top-2 routing,
 and aux-loss-free routing (using EMA-smoothed load bias adjustments).
-`DenseFFN` is a standard dense SwiGLU block.
 """
 
 from __future__ import annotations
@@ -15,7 +14,7 @@ from torch.nn import functional as F
 
 from hymo.core.config import ModelConfig
 
-__all__ = ["SwiGLUExpert", "DenseFFN", "DeepSeekMoE"]
+__all__ = ["SwiGLUExpert", "DeepSeekMoE"]
 
 
 class SwiGLUExpert(nn.Module):
@@ -31,24 +30,6 @@ class SwiGLUExpert(nn.Module):
 
     def forward(self, x: torch.Tensor) -> torch.Tensor:
         """SwiGLU forward pass: w2(silu(w1(x)) * w3(x))."""
-        return cast(
-            torch.Tensor, self.w2(F.silu(self.w1(x)) * self.w3(x))
-        )
-
-
-class DenseFFN(nn.Module):
-    """Dense SwiGLU FFN block (used on GDN blocks)."""
-
-    def __init__(self, dim: int, inter_dim: int) -> None:
-        super().__init__()
-        self.dim = dim
-        self.inter_dim = inter_dim
-        self.w1 = nn.Linear(dim, inter_dim, bias=False)
-        self.w2 = nn.Linear(inter_dim, dim, bias=False)
-        self.w3 = nn.Linear(dim, inter_dim, bias=False)
-
-    def forward(self, x: torch.Tensor) -> torch.Tensor:
-        """Dense SwiGLU forward pass: w2(silu(w1(x)) * w3(x))."""
         return cast(
             torch.Tensor, self.w2(F.silu(self.w1(x)) * self.w3(x))
         )

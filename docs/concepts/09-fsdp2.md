@@ -102,8 +102,9 @@ FSDP-2 supports per-parameter mixed precision via
 
 - Parameters stored as BF16 in the FSDP unit.
 - Gradients computed as BF16 during all-gather.
-- Master weights stored as FP32 in the optimizer (per
-  `optimizer.master_weights_dtype = "float32"`).
+- Master weights stored as FP32 in the optimizer (FSDP-2's internal
+  `cast_param_meta`/mixed-precision contract; there is no
+  `master_weights_dtype` config field).
 - The optimizer step is computed in FP32.
 - The master weights are cast back to BF16 for the next
   forward.

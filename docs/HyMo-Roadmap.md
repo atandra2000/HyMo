@@ -4,7 +4,7 @@
 > **Goal:** Build, validate, and run **HyMo v1.0** (750M active / 1.86B stored, 32 layers, 3:1 GDN:MLA, 30B tokens at 40× params-in-tokens) on 4× A100 80GB SXM with FSDP-2, achieving held-out FineWeb-Edu PPL ≤ 2.10.
 > **Source of truth for design decisions:** [`docs/HyMo-Design.md`](HyMo-Design.md) (this directory). This plan references the architecture doc by §X.Y throughout; do not re-derive any decision, look it up.
 > **Source of truth for the prior stability fixes:** the 6 v1 fixes (joint WSD, aux-loss-free, MTP checkpointing, deterministic validation, exact-name optimizer partition, config-driven trainer) are prerequisites and must be present before this plan starts.
-> **Tech Stack:** PyTorch ≥2.5, raw PyTorch (no HF Trainer), pytest, safetensors, BF16, 4× A100 80GB SXM (RunPod), FSDP-2, **hand-written Triton GDN kernel** (no `fla` dependency — see `src/hymo/models/gdn_triton.py`), lm-eval ≥ 0.4.5 (held-out evaluation).
+> **Tech Stack:** PyTorch ≥2.5, raw PyTorch (no HF Trainer), pytest, BF16, 4× A100 80GB SXM (RunPod), FSDP-2, **hand-written Triton GDN kernel** (no `fla` dependency — see `src/hymo/models/gdn_triton.py`), lm-eval ≥ 0.4.5 (held-out evaluation).
 > **Test style (hard rule):** No test may build the full 1.86 B-parameter
 > model in the default run. Default tests use the tiny (~760 K-param) config
 > (`tiny_hymo_model` / `tiny_hymo_config` fixtures, or the `ModelConfig()`
@@ -25,9 +25,9 @@ decomposed into 5 phases, each with its own gate — see
 | Phase | Status | Evidence |
 |---|---|---|---|
 | 1 — Repository foundation | **Shipped** | `PHASE_1_DELIVERY.md`; commit `f4c64e7` on `main`. (Note: Phase 1 numbers (308/308, `registry/` subdir) are historical — see the header note in `PHASE_1_DELIVERY.md` for current values.) Every `forward` was a `NotImplementedError_` placeholder. |
-| 2 — Algorithmic model implementation | **Completed** ✅ | Real `forward` logic implemented for every model class (`models/rope.py`, `gdn.py`, `mla.py`, `moe.py`, `mtp.py`, `init.py`, `model.py`). A smoke test confirms forward+backward is finite on the tiny config; `mypy --strict` + `ruff` clean. See **Phase 2 delivery note** below. |
+| 2 — Algorithmic model implementation | **Completed** ✅ | Real `forward` logic implemented for every model class (`models/rope.py`, `gdn.py`, `mla.py`, `moe.py`, `mtp.py`, `model.py`). (`init.py` was removed in the 2026-08-04 cleanup — never wired into `build_hymo`.) A smoke test confirms forward+backward is finite on the tiny config; `mypy --strict` + `ruff` clean. See **Phase 2 delivery note** below. |
 | 3 — Training infrastructure | **Completed** ✅ | Real step logic implemented for `optimizer.py` (NorMuon + CautiousAdamW with FP32 master weights), `scheduler.py` (JointWSDScheduler with 2% warmup / 0.05× min_lr_ratio), `validation.py` (real held-out FineWeb-Edu val), `checkpoint.py` (DCP save/load), `trainer.py` (full loop with MTP loss, FSDP-aware grad norm, NaN-skip, EMA gate bias, eval every 2k steps). See **Phase 3 delivery note** below. |
-| 4 — Data pipeline + eval + ablations | **Completed** ✅ | Real implementations for 10 source loaders (`sources.py`), `ExtendedTokenizer` with BPE-64k + byte-level fallback (`tokenizer.py`), `ShardWriter`/`ShardDataset`/`DataLoaderBuilder` (`sharding.py`), `prepare_validation.py` CLI; `run_harness_eval` (`harness.py`) + `run_all` 6-eval suite; ablation framework (4 families, config derivation) in `ablations/__init__.py`. See **Phase 4 delivery note** below. |
+| 4 — Data pipeline + eval + ablations | **Completed, then trimmed (2026-08-04)** | `ExtendedTokenizer` + `prepare_validation.py` remain; the 10 source loaders, `sharding.py`, `eval/`, and `ablations/` were removed in the cleanup (test-only — the trainer consumes a raw `data_iter`; the pipeline lives in workspace `LLM/shared_data/`). See **Phase 4 delivery note** below. |
 | 5 — Deployment + 30B-token run | Pending | All `scripts/runpod_*.sh` etc. to be written. |
 
 > **Current test count (as of commit `af89c48`, 2026-08-04):**
@@ -50,8 +50,8 @@ placeholder surfaces are now real:
   `update_gate_bias` (EMA load-balance, 1.05× threshold).
 - `models/mtp.py` — `MultiTokenPrediction.forward` (depth-2 chained hidden,
   shared head, weights `[0.3, 0.1]`) + `MTPBlock`.
-- `models/init.py` — real `mup_init` (zero-init scalars/gains, μP-scale 2D,
-  embed-scale).
+- ~~`models/init.py`~~ — removed in the 2026-08-04 cleanup (the μP init was
+  never called from `build_hymo`; see `docs/concepts/06-mup-init.md`).
 - `models/model.py` — `HyMo.forward` + `forward_with_hidden` (32-layer
   stack + final norm + `softcap`).
 
@@ -91,33 +91,18 @@ tiny config: `test_trainer_decreases_loss` (100-step run, loss decreases)
 and `test_trainer_checkpoint_roundtrip` (save → load → verify state).
 
 **Phase 4 delivery note (data pipeline + eval + ablations).** All 19
-placeholder surfaces (10 source loaders, tokenizer encode/decode, shard
-writer/reader/loader, validation builder, eval harness, ablation framework)
-are now real implementations:
+placeholder surfaces were implemented; the 2026-08-04 cleanup removed the
+test-only ones (10 source loaders, shard writer/reader/loader, eval
+harness, ablation framework) — the trainer consumes a raw `data_iter` and
+the pipeline lives in workspace `LLM/shared_data/`. Surviving surfaces:
 
 - `data/sources.py` — 10 real streaming HuggingFace dataset loaders
   (`load_fineweb_edu`, `load_fineweb`, `load_stack_python`, `load_stack_java`,
-  `load_stack_cpp`, `load_slimpajama`, `load_dclm_baseline`,
-  `load_dolma_wiki`, `load_dolma_books`, `load_cosmopedia`), each registered
-  in `DATA_SOURCES` and yielding `{"text": ...}` rows.
 - `data/tokenizer.py` — `ExtendedTokenizer.load()` / `encode()` (with byte-level
   fallback for OOV bytes) / `decode()` / `vocab_size` / `eos_token_id` /
   `pad_token_id`; `train_bpe_tokenizer()` helper.
-- `data/sharding.py` — `ShardWriter` (write one or batched uint32 arrays),
-  `ShardDataset` (indexed `(tokens, targets)` windows),
-  `DataLoaderBuilder` (wraps `DataLoader` with `RandomSampler`).
-- `data/prepare_validation.py` — CLI to build `data/tokens/val.bin` from a
-  held-out FineWeb-Edu shard.
-- `eval/harness.py` — `run_harness_eval()` wraps `lm_eval.simple_evaluate`,
-  returning `dict[str, EvalResult]`. Lazy `import lm_eval`.
-- `eval/run_all.py` — `run_all()` runs the 6-eval suite (HellaSwag, ARC,
-  MMLU, GSM8K, HumanEval, FineWeb-Edu PPL) with graceful `ImportError`
-  handling when `lm_eval` is not installed.
-- `ablations/__init__.py` — 4 families (A: MoE-on-attention, B: optimizer
-  partition, C: MTP depth, D: MQA-4 vs GQA-1.75) with `AblationSpec` and
-  `build_ablation_config()` using `dataclasses.replace`.
-- `configs/hymo_mixture.yaml` — 10-source mixture with weights summing to 1.0.
-- `core/exceptions.py` — added `AblationConfigError`.
+- `data/prepare_validation.py` — CLI to build the held-out FineWeb-Edu
+  validation binary.
 
 Verification: `pytest tests/ -v --tb=short` passes 325 tests (342 prior −
 17 phase-3 tests that were deleted/renamed + 28 new phase-4 tests added).

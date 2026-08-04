@@ -10,20 +10,23 @@
 > - [`learning_docs/1_Model_Architecture.md`](../learning_docs/1_Model_Architecture.md) — current code walkthrough
 > - [`learning_docs/6_Config_System.md`](../learning_docs/6_Config_System.md) — current config system reference
 >
-> **Current test count (as of commit `af89c48`, 2026-08-04):**
-> 279 passed / 35 skipped (default `pytest`, no `--run-heavy`).
-> 316 collected total. Heavies are full-model-construction tests that need
+> **Current test count (as of 2026-08-04, post-cleanup):**
+> 191 passed / 35 skipped (default `pytest`, no `--run-heavy`).
+> 226 collected total. Heavies are full-model-construction tests that need
 > `pytest --run-heavy` (CI / GPU pod). The 308 / 342 numbers in §5/§10
 > below were true at end of Phase 1 and have since drifted as the registry
 > module was removed (`72f7905`) and the model layer grew.
 >
 > **Removed since the original Phase 1 doc:** `hymo.registry/` was deleted
-> in commit `72f7905` (audit refactor). Anything in this file that
-> references a `registry/` subdir, `hymo.registry`, `hymo.utils.registry`,
-> `Registry`, or `RegistryError` is **historical** and not present in the
-> current tree — see `learning_docs/6_Config_System.md` for the current
-> typed-config and ablation-config approach (which replaced the registry
-> pattern).
+> in commit `72f7905` (audit refactor); the 2026-08-04 cleanup then removed
+> `hymo.utils/`, `hymo.ablations/`, `hymo.eval/`, and the in-repo data
+> pipeline modules (`sources.py`, `sharding.py`, `data_config.py`) — all
+> test-only. Anything in this file that references a `registry/` subdir,
+> `hymo.registry`, `hymo.utils.registry`, `Registry`, `RegistryError`,
+> `hymo.utils`, `hymo.ablations`, `hymo.eval`, or the data-pipeline
+> modules is **historical** and not present in the current tree — see
+> `learning_docs/6_Config_System.md` for the current typed-config approach
+> and `docs/concepts/06-mup-init.md` for the init status.
 
 ---
 

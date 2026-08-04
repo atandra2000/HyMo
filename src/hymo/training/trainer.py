@@ -108,8 +108,6 @@ class Trainer:
                 module.use_compile = t.torch_compile_gdn
             elif isinstance(module, DeepSeekMoE):
                 module.use_mixed_precision = t.moe_mixed_precision
-            elif isinstance(module, MLABlock):
-                module.use_cuda_graphs = t.cuda_graphs_mla
 
     def train_step(
         self,

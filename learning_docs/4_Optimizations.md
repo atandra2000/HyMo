@@ -52,7 +52,7 @@ fifth, **FSDP-2**, is what makes the 1.86 B-param model fit across
 | 1 | Triton GDN kernel | `fused_gdn` | `gdn.py` + `gdn_triton.py` | 3–5× over the Python double-loop |
 | 2 | `torch.compile` on GDN | `torch_compile_gdn` | `gdn.py::forward` | ~1.2× via small-op fusion |
 | 3 | MoE mixed precision (BF16 dispatch) | `moe_mixed_precision` | `moe.py::forward` | ~1.3× via halved HBM bandwidth |
-| 4 | CUDA Graphs on MLA | `cuda_graphs_mla` | `mla.py::forward` | ~1.1× via kernel-launch elimination |
+| ~~4~~ | CUDA Graphs on MLA | ~~`cuda_graphs_mla`~~ | — | Removed in the 2026-08-04 cleanup (never shipped) |
 
 The fifth optimization — **FSDP-2 full sharding** — is not optional at
 production scale. It's gated by `training.fsdp = True` (the default).
@@ -82,7 +82,6 @@ Defined in `src/hymo/core/config.py:265-269` as fields of
 fused_gdn: bool = True
 moe_mixed_precision: bool = True
 torch_compile_gdn: bool = True
-cuda_graphs_mla: bool = True
 ```
 
 (All default to `True` because production training depends on them.
@@ -106,8 +105,6 @@ def _thread_optimization_flags(self) -> None:
             module.use_compile = t.torch_compile_gdn
         elif isinstance(module, DeepSeekMoE):
             module.use_mixed_precision = t.moe_mixed_precision
-        elif isinstance(module, MLABlock):
-            module.use_cuda_graphs = t.cuda_graphs_mla
 ```
 
 This is called **once**, in `Trainer.__init__` (line 55), before the
@@ -123,7 +120,6 @@ training:
   fused_gdn: true              # default
   moe_mixed_precision: true    # default
   torch_compile_gdn: true      # default
-  cuda_graphs_mla: true        # default
 ```
 
 To disable any optimization for a debugging run, pass `--config
@@ -490,43 +486,15 @@ the main loss.
 
 ---
 
-## 6. CUDA Graphs on MLA
+## 6. CUDA Graphs on MLA — removed (2026-08-04)
 
-`TrainingConfig.cuda_graphs_mla: bool = True` threads through to
-`MLABlock.use_cuda_graphs = True`. In `mla.py::forward`,
-the MLA block:
-
-1. Runs its standard forward (low-rank KV compression → split
-   RoPE / NoPE heads → attention → output projection).
-2. On the first call with a given shape signature, **captures** a
-   CUDA graph via `torch.cuda.CUDAGraph()`.
-3. On subsequent calls with the same signature, **replays** the
-   graph instead of re-running the kernel launches.
-
-The capture happens per-rank on each device; shape changes
-(typically only on validation, where batch may be different from
-training) trigger recapture. CUDA Graphs require:
-
-- All tensors allocated via the CUDA caching allocator (default
-  PyTorch behavior).
-- No CPU–GPU sync inside the captured region (e.g. no
-  `.item()` calls).
-- Constant input shapes per capture.
-
-The MLA block satisfies all three by design — no `.item()` calls,
-fixed-shape `head_dim` and `n_heads`, and FSDP-2's parameter
-sharding is forward-pass-agnostic.
-
-### 6.1 Why MLA and not GDN?
-
-GDN already gets ~4.5× speedup from the Triton kernel, which is the
-bottleneck; the surrounding pointwise ops don't need CUDA-Graph
-capture for MLA-style launch-overhead elimination. MLA has more
-small ops per block (low-rank split, RoPE/Nope split, attention
-softmax, output projection), so it benefits more from graph
-capture.
-
----
+The `cuda_graphs_mla` flag and `MLABlock.use_cuda_graphs` attribute were
+**removed in the cleanup** — no CUDA-graph capture path ever shipped (the
+attr was set but never read in `forward`; the code carried a
+`ponytail:` comment acknowledging this). If kernel-launch overhead on the
+MLA path ever becomes the training bottleneck, add explicit
+`torch.cuda.CUDAGraph()` capture/replay (design §12a.4) and re-add the
+flag then.
 
 ## 7. FSDP-2 + BF16 mixed precision (overview)
 

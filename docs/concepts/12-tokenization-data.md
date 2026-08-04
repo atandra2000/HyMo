@@ -139,16 +139,16 @@ The mixture is loaded by `DataConfig` (see
   the OOV fallback.
 - `src/hymo/data/tokenizer.py:61` — `class ExtendedTokenizer`:
   the user-facing wrapper.
-- `src/hymo/data/sources.py` — 10 streaming loaders.
-- `src/hymo/data/sharding.py:25` — `ShardWriter`: writes
-  50 M-token flat shards.
-- `src/hymo/data/sharding.py:66` — `ShardDataset`: lazy
-  memmap dataset.
-- `src/hymo/data/sharding.py:116` — `DataLoaderBuilder`:
-  builds the PyTorch DataLoader.
-- `src/hymo/data/data_config.py:29` — `SourceSpec`.
-- `src/hymo/data/data_config.py:128` — `DataConfig`.
-- `configs/hymo_mixture.yaml` — the mixture file.
+- `src/hymo/data/prepare_validation.py` — builds the held-out
+  validation binary from FineWeb-Edu via `ExtendedTokenizer`.
+
+> **Scope note (2026-08-04 cleanup):** the in-repo pipeline modules
+> (`sources.py` — 10 streaming loaders, `sharding.py` — `ShardWriter` /
+> `ShardDataset` / `DataLoaderBuilder`, `data_config.py` — `SourceSpec` /
+> `DataConfig`) were removed. The trainer consumes a raw `data_iter` and
+> the data-preparation pipeline lives in the workspace
+> `LLM/shared_data/` package; only the tokenizer and validation-set
+> builder remain in-repo.
 
 ## Worked example
 

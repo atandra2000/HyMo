@@ -121,7 +121,7 @@ in a learning doc. The reverse mapping (walkthrough-section → concept):
 | **NorMuon** | Muon optimizer variant for non-attention 2D matrices (e.g. MoE expert weights excluded) with cautious weight decay and FP32 master weights. | `concepts/07-muon-optimizer.md` |
 | **CautiousAdamW** | AdamW where the weight-decay mask zeros the update on coordinates where the gradient disagrees with the parameter sign (Liang et al. 2024). | `concepts/07-muon-optimizer.md` |
 | **FSDP-2** | PyTorch's `fully_shard` API — full parameter + gradient + optimizer-state sharding. | `concepts/09-fsdp2.md` |
-| **μP (mup_init)** | Maximal Update Parameterization — scale-invariant init that lets you tune hyperparameters on a tiny model and transfer to the full scale. | `concepts/06-mup-init.md` |
+| **Initialization** | PyTorch defaults + inline MoE-gate init (`bias=0`, `std=0.006`) + GDN recurrence init; the designed μP init was never wired in and was removed (see the honest status in `concepts/06-mup-init.md`). | `concepts/06-mup-init.md` |
 | **Logit softcap** | `15 * tanh(logits / 15)` — bounds logits for training stability (PaLM). | `learning_docs/1_Model_Architecture.md` §3 |
 | **DCP** | Distributed Checkpoint — PyTorch's async-checkpoint API for sharded save/load. | `learning_docs/3_Training_Pipeline.md` §Checkpoint |
 | **Tiny config** | The ~760 K-param config used by the default test suite; never build the production 1.86 B-param model in a non-`heavy` test. | [`../AGENTS.md`](../AGENTS.md) §Testing rules |

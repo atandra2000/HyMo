@@ -237,7 +237,7 @@ def decay_steps(self) -> int:   return int(self.total_steps * self.decay_frac)  
 The 57,220-step total is `30 B tokens / 524,288 tokens per step`
 (see `TrainingConfig.per_step_tokens` below).
 
-### 2.4 `TrainingConfig` (line 238)
+### 2.4 `TrainingConfig`
 
 ```python
 @dataclass(frozen=True)
@@ -254,26 +254,20 @@ class TrainingConfig:
 
     # Gradient handling
     grad_clip: float = 1.0
-    grad_norm_threshold: float = 10.0
     loss_nan_skip: bool = True
-    consecutive_nan_limit: int = 5
-    empty_cache_every: int = 100
 
     # Checkpoint cadence
-    save_dir: str = "checkpoints/pretrain"
     save_interval: int = 4_000
     log_interval: int = 50
     eval_interval: int = 2_000
-    max_keep: int = 2
 
-    # Optimizations — the 4 flags (default True)
+    # Optimizations — the 3 flags (default True)
     fused_gdn: bool = True
     moe_mixed_precision: bool = True
     torch_compile_gdn: bool = True
-    cuda_graphs_mla: bool = True
 ```
 
-#### Validation in `__post_init__` (lines 271-288)
+#### Validation in `__post_init__`
 
 | Check | Error |
 |---|---|
@@ -282,7 +276,6 @@ class TrainingConfig:
 | `world_size > 0` | `ValueError` |
 | `grad_clip > 0` | `ValueError` |
 | `save_interval > 0`, `eval_interval > 0` | `ValueError` |
-| `consecutive_nan_limit > 0` | `ValueError` |
 | `fsdp_mixed_precision in {"bfloat16", "float32", "float16"}` | `ValueError` |
 
 #### Property: `per_step_tokens` (line 290)
@@ -302,43 +295,39 @@ This is the per-optimizer-step token count across all ranks. The 30 B
 training run is `30e9 / 524_288 ≈ 57,220` optimizer steps — which is
 where `SchedulerConfig.total_steps = 57_220` comes from.
 
-#### The four optimization flags (lines 265-269)
+#### The three optimization flags
 
 | Flag | Threads to | Default | See |
 |---|---|---|---|
 | `fused_gdn` | `GatedDeltaNetBlock.use_triton` | True | `learning_docs/4_Optimizations.md` §GDN kernel |
 | `moe_mixed_precision` | `DeepSeekMoE.use_mixed_precision` | True | `learning_docs/4_Optimizations.md` §MoE |
 | `torch_compile_gdn` | `GatedDeltaNetBlock.use_compile` | True | `learning_docs/4_Optimizations.md` §torch.compile |
-| `cuda_graphs_mla` | `MLABlock.use_cuda_graphs` | True | `learning_docs/4_Optimizations.md` §CUDA graphs |
 
-All four are wired in `Trainer._thread_optimization_flags`
-(`src/hymo/training/trainer.py:91-112`) at construction time.
+All three are wired in `Trainer._thread_optimization_flags`
+(`src/hymo/training/trainer.py`) at construction time. (The
+`cuda_graphs_mla` flag and its `MLABlock.use_cuda_graphs` attr were removed
+in the 2026-08-04 cleanup — no CUDA-graph capture path ever shipped.)
 
-### 2.5 `RunConfig` (line 302)
+### 2.5 `RunConfig`
 
 ```python
 @dataclass(frozen=True)
 class RunConfig:
     name: str = "hymo-v1.0"
-    seed: int = 42
     output_dir: str = "checkpoints/pretrain"
-    log_dir: str = "logs"
-    eval_dir: str = "checkpoints/pretrain/eval"
-    distributed: bool = True
-    deterministic: bool = True
-    resume_from: str | None = None
 ```
 
-#### Validation in `__post_init__` (lines 314-318)
+#### Validation in `__post_init__`
 
 | Check | Error |
 |---|---|
 | `name` non-empty | `ValueError` |
-| `seed >= 0` | `ValueError` |
 
-`deterministic: True` triggers PyTorch deterministic algorithms in the
-trainer (slower but reproducible). `resume_from` is the path to a DCP
-checkpoint to restore from.
+The earlier `seed` / `log_dir` / `eval_dir` / `distributed` /
+`deterministic` / `resume_from` fields were removed in the 2026-08-04
+cleanup — no production code read them (the trainer hardcodes
+`torch.manual_seed(0)` in the smoke driver, writes to `run.output_dir`,
+and never seeded deterministically).
 
 ### 2.6 `HyMoConfig` (line 322)
 
@@ -480,9 +469,9 @@ def derive_config(base, *, model=None, optimizer=None, scheduler=None,
     )
 ```
 
-This is the function the ablation framework uses
-(`src/hymo/ablations/__init__.py`); see
-`learning_docs/5_Evaluation_and_Ablations.md` §Ablations.
+This is the function the eval/ablation framework was going to use; the
+in-repo `ablations/` package was removed in the 2026-08-04 cleanup (see
+`learning_docs/5_Evaluation_and_Ablations.md` §2).
 
 ---
 
@@ -644,5 +633,6 @@ classes?**
   `docs/concepts/09-fsdp2.md` (training flags).
 - Validation: `src/hymo/core/config_validation.py` for the cross-field
   checks.
-- Ablations: `src/hymo/ablations/__init__.py` for `derive_config` in
-  action.
+- Config derivation: `hymo.core.config.derive_config` — the
+  `dataclasses.replace`-based helper (the in-repo `ablations/` package was
+  removed in the 2026-08-04 cleanup).

@@ -48,7 +48,6 @@ class ModelConfig:
     gdn_d_conv: int = 4
     gdn_headdim: int = 32
     gdn_d_inner: int = 1_280
-    gdn_chunk_size: int = 64
 
     # NoPE-hybrid
     nope_hybrid_gdn_enabled: bool = False
@@ -61,9 +60,6 @@ class ModelConfig:
     moe_ema_alpha: float = 0.02
     moe_capacity_factor: float = 1.5
 
-    # DenseFFN on GDN blocks
-    inter_dim: int = 2_560
-
     # MTP
     mtp_depth: int = 2
     mtp_loss_weights: tuple[float, ...] = (0.3, 0.1)
@@ -71,9 +67,6 @@ class ModelConfig:
 
     # Logit softcap
     logit_softcap: float = 15.0
-
-    # Init
-    mup_init: bool = True
 
     def __post_init__(self) -> None:
         if self.vocab_size <= 0:
@@ -165,10 +158,6 @@ class OptimizerConfig:
     adamw_betas: tuple[float, float] = (0.9, 0.95)
     adamw_eps: float = 1e-8
     adamw_weight_decay: float = 0.0
-    adamw_embed_weight_decay: float = 0.1
-
-    # Master weight precision
-    master_weights_dtype: str = "float32"
 
     # Cautious weight decay (2D weights only)
     cautious_wd: bool = True
@@ -182,11 +171,6 @@ class OptimizerConfig:
                             ("adamw_betas", self.adamw_betas)):
             if not (0.0 <= betas[0] < 1.0 and 0.0 <= betas[1] < 1.0):
                 raise ValueError(f"{name} must each be in [0, 1)")
-        if self.master_weights_dtype not in ("float32", "bfloat16"):
-            raise ValueError(
-                f"master_weights_dtype must be 'float32' or 'bfloat16', "
-                f"got {self.master_weights_dtype!r}"
-            )
 
 
 @dataclass(frozen=True)
@@ -250,23 +234,17 @@ class TrainingConfig:
 
     # Gradient handling
     grad_clip: float = 1.0
-    grad_norm_threshold: float = 10.0
     loss_nan_skip: bool = True
-    consecutive_nan_limit: int = 5
-    empty_cache_every: int = 100
 
     # Checkpoint
-    save_dir: str = "checkpoints/pretrain"
     save_interval: int = 4_000
     log_interval: int = 50
     eval_interval: int = 2_000
-    max_keep: int = 2
 
     # Optimizations
     fused_gdn: bool = True
     moe_mixed_precision: bool = True
     torch_compile_gdn: bool = True
-    cuda_graphs_mla: bool = True
 
     def __post_init__(self) -> None:
         if self.micro_batch_size <= 0:
@@ -279,8 +257,6 @@ class TrainingConfig:
             raise ValueError("grad_clip must be > 0")
         if self.save_interval <= 0 or self.eval_interval <= 0:
             raise ValueError("save/eval intervals must be > 0")
-        if self.consecutive_nan_limit <= 0:
-            raise ValueError("consecutive_nan_limit must be > 0")
         if self.fsdp_mixed_precision not in ("bfloat16", "float32", "float16"):
             raise ValueError(
                 f"fsdp_mixed_precision must be 'bfloat16', 'float32', or "
@@ -300,22 +276,14 @@ class TrainingConfig:
 
 @dataclass(frozen=True)
 class RunConfig:
-    """Run configuration, seeds, directory names, and reproducibility flags."""
+    """Run configuration and directory names."""
 
     name: str = "hymo-v1.0"
-    seed: int = 42
     output_dir: str = "checkpoints/pretrain"
-    log_dir: str = "logs"
-    eval_dir: str = "checkpoints/pretrain/eval"
-    distributed: bool = True
-    deterministic: bool = True
-    resume_from: str | None = None
 
     def __post_init__(self) -> None:
         if not self.name:
             raise ValueError("name must be a non-empty string")
-        if self.seed < 0:
-            raise ValueError("seed must be >= 0")
 
 
 @dataclass(frozen=True)

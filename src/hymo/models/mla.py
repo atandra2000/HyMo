@@ -153,11 +153,6 @@ class MLABlock(nn.Module):
         self.attn = MultiHeadLatentAttention(config, layer_idx=layer_idx)
         self.moe_norm = nn.RMSNorm(config.dim)
         self.moe = DeepSeekMoE(config, layer_idx=layer_idx)
-        # CUDA-Graph capture flag (design §12a.4), threaded from the training
-        # config. The capture/replay itself is a GPU-only runtime concern.
-        # ponytail: no explicit capture path; SDPA already fuses on CUDA.
-        # Add graph capture when the MLA path becomes the training bottleneck.
-        self.use_cuda_graphs = True
 
     def forward(self, x: torch.Tensor) -> torch.Tensor:
         """Forward pass applying pre-norm Attention followed by pre-norm MoE."""

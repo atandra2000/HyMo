@@ -27,7 +27,6 @@ model:
   gdn_d_conv: 4
   gdn_headdim: 32
   gdn_d_inner: 1280
-  gdn_chunk_size: 64
 
   # NoPE-hybrid (CR-12 mitigation: disabled by default in v1.0)
   nope_hybrid_gdn_enabled: false
@@ -41,7 +40,6 @@ model:
   moe_capacity_factor: 1.5
 
   # DenseFFN on GDN blocks
-  inter_dim: 2560
 
   # MTP
   mtp_depth: 2
@@ -52,7 +50,6 @@ model:
   logit_softcap: 15.0
 
   # Init
-  mup_init: true
 
 optimizer:
   # NorMuon (attention + GDN matrices, 2D dense)
@@ -67,10 +64,8 @@ optimizer:
   adamw_betas: [0.9, 0.95]
   adamw_eps: 1.0e-8
   adamw_weight_decay: 0.0
-  adamw_embed_weight_decay: 0.1
 
   # Master weight precision
-  master_weights_dtype: float32
 
   # Cautious weight decay
   cautious_wd: true
@@ -96,30 +91,18 @@ training:
 
   # Gradient handling
   grad_clip: 1.0
-  grad_norm_threshold: 10.0
   loss_nan_skip: true
-  consecutive_nan_limit: 5
-  empty_cache_every: 100
 
   # Checkpoint + eval
-  save_dir: checkpoints/pretrain
   save_interval: 4000
   log_interval: 50
   eval_interval: 2000
-  max_keep: 2
 
   # Optimizations
   fused_gdn: true
   moe_mixed_precision: true
   torch_compile_gdn: true
-  cuda_graphs_mla: true
 
 run:
   name: hymo-v1.0
-  seed: 42
   output_dir: checkpoints/pretrain
-  log_dir: logs
-  eval_dir: checkpoints/pretrain/eval
-  distributed: true
-  deterministic: true
-  resume_from: null

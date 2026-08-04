@@ -784,10 +784,8 @@ def build_hymo(config: HyMoConfig) -> HyMo:
 def build_hymo(config: HyMoConfig) -> HyMo:
     model = HyMo(config.model)
 
-    # Future: post-initialization steps
-    # mup_init(model, config.model)      # μP initialization
-    # wrap_fsdp(model, config.training)   # FSDP wrapping
-    # capture_cuda_graphs(model)          # CUDA Graph capture
+    # No custom init pass — PyTorch module defaults + inline gate/GDN init
+    # (see docs/concepts/06-mup-init.md). FSDP wrapping happens in the trainer.
 
     return model
 ```
@@ -1754,7 +1752,6 @@ class GatedDeltaNetBlock(nn.Module):
         self.n_heads = n_heads
         self.headdim = headdim
         self.d_state = d_state
-        self.chunk_size = config.gdn_chunk_size
 
         # Projections
         self.in_proj = nn.Linear(d_model, d_inner, bias=False)
@@ -2845,190 +2842,17 @@ class MultiTokenPrediction(nn.Module):
 
 ---
 
-## 10. μP Initialization (init.py) — Width-Invariant Training
+## 10. Initialization — status note
 
-**File:** `src/hymo/models/init.py`
+**The μP init module (`src/hymo/models/init.py`) never shipped in the
+production path and was removed in the 2026-08-04 cleanup.** `build_hymo`
+constructs `HyMo(config.model)` and applies no init pass — the model uses
+PyTorch module defaults plus the inline MoE-gate init
+(`gate.bias = 0`, `gate.weight ~ N(0, 0.006²)` in `moe.py`) and the GDN
+recurrence init (`A_log`, `dt_bias`, `D` in `gdn.py`).
 
-> **μP (Maximal Update Parametrization) ensures that the gradient scales correctly as the model width changes.** Without μP, changing `dim` or other architectural parameters often requires retuning the learning rate. This is critical for transfer learning between model sizes.
-
----
-
-### 10.1 The Problem: Width-Dependent Dynamics
-
-#### 10.1.1 Standard Initialization
-
-In standard initialization (e.g., `nn.Linear` default), the variance of activations grows with width:
-```
-Var(h) = Var(x) × Var(w) × fan_in
-```
-
-For a linear layer `y = Wx` with `W ~ N(0, σ²)`:
-```
-Var(y) = Var(x) × σ² × fan_in
-```
-
-If `σ² = 1/fan_in` (Kaiming), then `Var(y) = Var(x)` — activations are stable. But the **gradient** scales differently:
-```
-∂L/∂W = ∂L/∂y × x^T
-```
-
-The gradient magnitude depends on `x`, which depends on `fan_in`. As width increases, gradients change scale, requiring learning rate retuning.
-
-#### 10.1.2 The μP Solution
-
-μP rescales initialization and learning rates so that the **update to the pre-activations** stays constant regardless of width:
-
-```
-Δ(Wx)_preactivation = η × ∂L/∂(Wx) × (x / √fan_in)
-```
-
-The key insight: the learning rate `η` must scale as `1/fan_in` for width-invariant updates. μP achieves this by:
-1. Scaling initialization std as `1/dim` (not `1/√dim`)
-2. Scaling learning rate as `1/dim` (not constant)
-
----
-
-### 10.2 The μP Initialization Formula
-
-```python
-def mup_init(model, config):
-    dim = config.dim                     # 896
-    attn_std = 1.0 / dim                 # ~0.0011 — for attention weights
-    embed_std = 1.0 / math.sqrt(dim)     # ~0.033 — for embedding weights
-```
-
-#### 10.2.1 Attention Weights: `1/dim`
-
-For attention weights `W_q`, `W_k`, `W_v`, `W_o`:
-```
-std = 1/dim = 1/896 ≈ 0.0011
-```
-
-**Why 1/dim?**
-- The attention output is: `attn = softmax(QK^T / √d_head) × V`
-- Each element of the output is a weighted sum of `d_head` values
-- To keep the output variance constant as `d_head` changes, the initialization must scale as `1/dim`
-
-#### 10.2.2 Embedding Weights: `1/√dim`
-
-For embedding weights `W_embed`:
-```
-std = 1/√dim = 1/√896 ≈ 0.033
-```
-
-**Why 1/√dim?**
-- The embedding lookup is: `h = W_embed[token_id]`
-- Each element of the output is a single element from the weight matrix
-- To keep the output variance constant, the initialization must scale as `1/√dim`
-
-#### 10.2.3 The Difference
-
-| Layer Type | μP Std | Kaiming Std | Ratio |
-|------------|--------|-------------|-------|
-| Attention | 1/dim | 1/√dim | 1/√dim |
-| Embedding | 1/√dim | 1/√dim | 1.0 |
-
-The embedding layer uses standard Kaiming initialization. The attention layers use a much smaller std (1/dim vs 1/√dim).
-
----
-
-### 10.3 Zero-Initialized Parameters
-
-#### 10.3.1 The Pattern
-
-```python
-def zero_init_predicate(name: str) -> bool:
-    return any(kw in lowered for kw in [
-        "gate", "g_proj", "a_log", "dt_bias", "router",
-        "output_head", "bias", "q_norm", "kv_norm",
-        "q_norm_qk", "k_norm_qk", "mtp", "embed",
-    ]) and not (kw == "d" and "embed" in lowered)
-```
-
-#### 10.3.2 Why Zero?
-
-Each zero-initialized parameter has a specific reason:
-
-| Parameter | Why Zero |
-|-----------|----------|
-| `gate`, `g_proj` | Gates start closed — no information flows initially |
-| `A_log` | Decay starts at identity — no forgetting initially |
-| `dt_bias` | Delta time starts neutral — no temporal bias |
-| `router` | Routing starts random — no expert selection initially |
-| `output_head` | Output starts neutral — no prediction initially |
-| `bias` | All biases start at zero — standard practice |
-| `q_norm`, `kv_norm` | Norm scaling starts at zero — no normalization initially |
-| `mtp` | MTP heads start closed — no auxiliary signal initially |
-| `embed` | Embeddings start at zero — model learns from scratch |
-
-#### 10.3.3 The D Parameter Gotcha
-
-The keyword `"d"` matches many parameter names (e.g., `embed.weight` contains `d`). The special case prevents zero-initializing embedding weights just because their name contains the letter 'd':
-
-```python
-if kw == "d" and "embed" in lowered:
-    continue  # Don't zero-initialize embedding weights
-```
-
----
-
-### 10.4 Why μP Matters for HyMo
-
-#### 10.4.1 Transfer Learning Between Sizes
-
-μP allows training a small model and transferring hyperparameters to a larger model:
-```
-Small model (dim=512) trained → Large model (dim=896) with same LR
-```
-
-Without μP, the larger model would need a different learning rate.
-
-#### 10.4.2 Stability at Scale
-
-The 1/dim initialization ensures that:
-- Attention outputs don't explode as dim increases
-- Gradients remain in a stable range
-- Training is less sensitive to learning rate choices
-
-#### 10.4.3 Compatibility with torch.compile
-
-μP initialization is static — it doesn't depend on runtime values. This makes it compatible with `torch.compile`, which requires static shapes and operations.
-
----
-
-### 10.5 Code Walkthrough (src/hymo/models/init.py)
-
-```python
-def mup_init(model: nn.Module, config: "ModelConfig") -> None:
-    """Initialize model parameters using μP."""
-    dim = config.dim                     # 896
-    attn_std = 1.0 / dim                 # ~0.0011
-    embed_std = 1.0 / math.sqrt(dim)     # ~0.033
-
-    for name, p in model.named_parameters():
-        # Zero-init special parameters
-        if zero_init_predicate(name):
-            with torch.no_grad():
-                p.data.zero_()
-            continue
-
-        # Skip non-2D parameters (biases, norms)
-        if p.dim() < 2:
-            continue
-
-        # Initialize with μP std
-        with torch.no_grad():
-            std = embed_std if "embed" in name else attn_std
-            p.data.normal_(mean=0.0, std=std)
-```
-
-**Key design decisions:**
-1. **Two std values** — `1/dim` for attention, `1/√dim` for embeddings
-2. **Zero-init for gates** — ensures clean start for training
-3. **`persistent=False`** — μP init is applied fresh on each load
-4. **`torch.no_grad()`** — no gradient tracking during initialization
-
----
+See [`docs/concepts/06-mup-init.md`](../docs/concepts/06-mup-init.md)
+for the full honest status and where init actually happens.
 
 ## 11. End-to-End Forward Pass Trace — Memory & Compute Profile
 
@@ -3558,10 +3382,9 @@ def count_parameters(model: nn.Module) -> dict[str, int]:
 | `gdn.py` | `GatedDeltaNetBlock` | 178 | Linear-attention GDN block |
 | `gdn_triton.py` | `TritonGDNFunction`, kernels | 302 | Fused Triton GDN forward/backward |
 | `mla.py` | `MultiHeadLatentAttention`, `MLABlock` | 171 | Low-rank KV compression + MQA-4 |
-| `moe.py` | `DeepSeekMoE`, `DenseFFN`, `SwiGLUExpert` | 155 | MoE with aux-loss-free routing |
+| `moe.py` | `DeepSeekMoE`, `SwiGLUExpert` | 155 | MoE with aux-loss-free routing |
 | `mtp.py` | `MultiTokenPrediction`, `MTPBlock` | 108 | Depth-2 multi-token predictions |
 | `rope.py` | `RotaryEmbedding` | 101 | Precomputed cos/sin RoPE tables |
-| `init.py` | `mup_init`, `zero_init_predicate` | 64 | μP weight initialization |
 
 ---
 

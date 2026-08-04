@@ -472,31 +472,35 @@ YaRN-style extension is a + feature. HyMo trains at T=4096 and validates at T=40
 
 ---
 
-## 4. Initialization (μP)
+## 4. Initialization
 
-inherited μP init from [`models/init.py:39`](../src/hymo/models/init.py) (`mup_init`). The init is:
+> **Status note (2026-08-04):** the μP init module described in earlier
+> drafts (`src/hymo/models/init.py`, `mup_init` / `zero_init_predicate`)
+> was **never wired into the production path** — `build_hymo` constructs
+> `HyMo(config.model)` and applies no init pass. It was removed in the
+> cleanup. The shipped model uses PyTorch module defaults plus two inline
+> choices:
 
-1. **Zero-initialize** every parameter whose name contains any of: `gate`, `g_proj`, `A_log`, `dt_bias`, `router`, `output_head`, `bias`. These are scalar/control-flow params that should start at 0 so the first forward is "no-op for these paths."
-2. **Standard init** (`std = 0.02`) on every 1D parameter (norm γ, biases — though biases are already zeroed, so this is moot).
-3. **μP-scaled init** on every 2D parameter:
-- `std = 1 / dim` for attention/MLP weights (≈ 1.1e-3 at dim=896)
-- `std = 1 / sqrt(dim)` for the embedding (≈ 0.033 at dim=896)
-4. **No special init for GDN A_log, dt_bias, D** — these are zeroed by step 1, then updated by the optimizer to their natural values. The "no_weight_decay" flag on these prevents AdamW from decaying them toward 0.
+1. **MoE gate** (in `moe.py`): `gate.bias = 0`, `gate.weight ~ N(0, 0.006²)`.
+   The zero bias is critical for routing stability: with a zero gate bias
+   the first few hundred tokens all go to the top-2 experts in the random
+   tie-break, the running-bias update (`moe.py:update_gate_bias`)
+   establishes a stable load profile, and routing converges within ~1k
+   steps.
+2. **GDN recurrence params** (in `gdn.py`): `A_log = log(1..n_heads)`
+   (so `A = -exp(A_log)` is a gentle per-head decay), `dt_bias = 0`,
+   `D = ones`. No optimizer-side `no_weight_decay` special-casing exists;
+   these params decay like any other.
 
-**Why this is right for the mixed architecture:**
+**Why no μP init ships:** the LR schedule (NorMuon `0.02`, AdamW `3e-4`)
+was tuned on the default-init model. Enabling μP would require re-tuning.
+The μP design (scaling rules, zero-init keyword set) is preserved in git
+history for a future Phase if the first run shows init-scale instability.
 
-Without μP, the first forward would have:
-- GDN `in_proj` at std=0.02 → output magnitude ~0.02 × sqrt(6 × 1280) ≈ 1.75
-- MLA `wkv_b` at std=0.02 → output magnitude similar
-- MoE `gate` at std=0.006 → output magnitude ~0.05
-
-These are *very different magnitudes* across the 3 primitives. The first backward pass would saturate the GDN and MLA paths and leave the MoE gate at near-zero gradient. μP init at `std = 1/dim` for all 2D matrices puts everything at the same scale, and the first backward is balanced.
-
-**The zero-on-gate/bias step is critical for MoE:** without it, the gate initial top-2 selection is random, which means the first few hundred tokens' expert assignments are *unstable*, and the running-bias update mechanism in `moe.py:89-98` chases a moving target. With init-zero gate bias, the first few hundred tokens all go to the top-2 experts in the random tie-break, the bias update establishes a stable load profile, and routing converges within ~1k steps.
-
-**The init must be applied on rank 0 only and broadcast:**
-
-With FSDP-2, the model is sharded across 4 ranks after the first forward. The μP init is run on each rank *before* the first FSDP collective; the random seeds are aligned so each rank produces the same init. PyTorch `torch.distributed.broadcast` on the parameter tensors is used as a belt-and-suspenders check at the end of `__init__` to guarantee rank 0 and rank 3 are bit-identical. This avoids silent init divergence that would show up as different per-rank loss curves in the first 100 steps.
+**Init is applied identically on every rank:** FSDP-2 shards after the
+first forward; since there is no custom init pass, every rank constructs
+the same default-initialized parameters (same seed) and no broadcast
+check is needed.
 
 ---
 

@@ -1,58 +1,40 @@
 # HyMo — Configuration Reference
 
-> **Prerequisite reading:** none. This is the first doc to read if you want
-> to understand a `configs/hymo_750m.yaml` field.
+> **Prerequisite reading:** none. This is the first doc to read if you want to understand a `configs/hymo_750m.yaml` field.
 >
 > **Files covered:**
 > - `src/hymo/core/config.py` — the 5 frozen dataclasses + load/save
 > - `src/hymo/core/config_validation.py` — cross-field invariant checks
 > - `src/hymo/core/types.py` — semantic newtypes
 >
-> **Companion concepts:** see [`optimization.md`](../concepts/optimization.md) for why every
-> field exists, [`optimization.md`](../concepts/optimization.md) for the scheduler
-> fractions, [`optimization.md`](../concepts/optimization.md) for the optimizer
-> hyperparameters.
+> **Companion concepts:** see [`optimization.md`](../concepts/optimization.md) for why every field exists, [`optimization.md`](../concepts/optimization.md) for the scheduler fractions, [`optimization.md`](../concepts/optimization.md) for the optimizer hyperparameters.
 
 ---
 
 ## 1. Why a config system
 
-HyMo's primary config is a **6 KB YAML file** (`configs/hymo_750m.yaml`)
-that drives everything: the model architecture, the optimizer partition,
-the LR schedule, the distributed training settings, and the run
-identity. The config system exists to:
+HyMo's primary config is a **6 KB YAML file** (`configs/hymo_750m.yaml`) that drives everything: the model architecture, the optimizer partition, the LR schedule, the distributed training settings, and the run identity. The config system exists to:
 
 1. **Be the single source of truth.** Every architectural knob is in
    one place; code reads it via a single typed object.
 2. **Make mutation impossible by accident.** Every config class is
-   `@dataclass(frozen=True)`, so the training loop cannot accidentally
-   bump a `dim` or change an LR mid-run.
+   `@dataclass(frozen=True)`, so the training loop cannot accidentally bump a `dim` or change an LR mid-run.
 3. **Make variants easy.** Derive an ablation config via
-   `dataclasses.replace` (or the higher-level `derive_config`); the
-   base config is never mutated.
+   `dataclasses.replace` (or the higher-level `derive_config`); the base config is never mutated.
 4. **Fail loud.** Cross-field invariants (e.g. `n_heads % n_kv_groups == 0`)
-   are checked in `__post_init__` and again in
-   `core/config_validation.py::validate_full_config`, so a wrong YAML
-   surfaces a clear error before any GPU time is spent.
+   are checked in `__post_init__` and again in `core/config_validation.py::validate_full_config`, so a wrong YAML surfaces a clear error before any GPU time is spent.
 
-The dependency graph is `core ← utils ← {models, training, data, eval}`
-(see `AGENTS.md` §Engineering rules). `core` is **PyTorch-free** — it
-imports nothing from `torch.*` (except the `DType` alias in `types.py`).
-This means you can import `hymo.core.config` from a CPU machine, a CI
-runner, or a config-lint script without paying the torch import cost.
+The dependency graph is `core ← utils ← {models, training, data, eval}` (see `AGENTS.md` §Engineering rules). `core` is **PyTorch-free** — it imports nothing from `torch.*` (except the `DType` alias in `types.py`). This means you can import `hymo.core.config` from a CPU machine, a CI runner, or a config-lint script without paying the torch import cost.
 
 ---
 
 ## 2. The five sub-configs
 
-`src/hymo/core/config.py` defines five `@dataclass(frozen=True)` classes.
-`HyMoConfig` aggregates them. Each sub-config has its own `__post_init__`
-that validates its fields independently.
+`src/hymo/core/config.py` defines five `@dataclass(frozen=True)` classes. `HyMoConfig` aggregates them. Each sub-config has its own `__post_init__` that validates its fields independently.
 
 ### 2.1 `ModelConfig` (line 23)
 
-Architectural hyperparameters — the only place in the code that defines
-*what the model is*.
+Architectural hyperparameters — the only place in the code that defines *what the model is*.
 
 ```python
 @dataclass(frozen=True)
@@ -124,9 +106,7 @@ class ModelConfig:
 | If `mtp_depth > 0`: `len(mtp_loss_weights) == mtp_depth`, all `>= 0` | `ValueError` |
 | `logit_softcap >= 0` | `ValueError` |
 
-The `qk_rope + qk_nope == head_dim` check is what enforces the
-"25% partial RoPE" invariant — there's no way to mis-configure it
-silently.
+The `qk_rope + qk_nope == head_dim` check is what enforces the "25% partial RoPE" invariant — there's no way to mis-configure it silently.
 
 #### Properties (lines 124-149)
 
@@ -156,11 +136,7 @@ def nope_hybrid_gdn_positions(self) -> frozenset[int]:
     return frozenset(mla - 1 for mla in self.mla_positions if mla > 0)
 ```
 
-`mla_positions` and `gdn_positions` are computed from `n_layers` so
-the 3:1 ratio is **structural**, not a config field. A 28-layer
-stack would still get a 3:1 split (`n_mla_layers = 7`, `n_gdn_layers = 21`).
-The NoPE-hybrid subset is exactly `{3, 7, 11, 15, 19, 23, 27}` for the
-default 32-layer stack.
+`mla_positions` and `gdn_positions` are computed from `n_layers` so the 3:1 ratio is **structural**, not a config field. A 28-layer stack would still get a 3:1 split (`n_mla_layers = 7`, `n_gdn_layers = 21`). The NoPE-hybrid subset is exactly `{3, 7, 11, 15, 19, 23, 27}` for the default 32-layer stack.
 
 ### 2.2 `OptimizerConfig` (line 153)
 
@@ -197,8 +173,7 @@ class OptimizerConfig:
 | `0 <= beta < 1` for both `muon_betas` and `adamw_betas` | `ValueError` |
 | `master_weights_dtype in {"float32", "bfloat16"}` | `ValueError` |
 
-The `cautious_wd: bool = True` flag drives the cautious-mask logic in
-`CautiousAdamW.step` (see `concepts/optimization.md`).
+The `cautious_wd: bool = True` flag drives the cautious-mask logic in `CautiousAdamW.step` (see `concepts/optimization.md`).
 
 ### 2.3 `SchedulerConfig` (line 193)
 
@@ -234,8 +209,7 @@ def stable_steps(self) -> int:  return int(self.total_steps * self.stable_frac) 
 def decay_steps(self) -> int:   return int(self.total_steps * self.decay_frac)    # 8583
 ```
 
-The 57,220-step total is `30 B tokens / 524,288 tokens per step`
-(see `TrainingConfig.per_step_tokens` below).
+The 57,220-step total is `30 B tokens / 524,288 tokens per step` (see `TrainingConfig.per_step_tokens` below).
 
 ### 2.4 `TrainingConfig`
 
@@ -291,9 +265,7 @@ def per_step_tokens(self) -> int:
     )                                # = 524_288
 ```
 
-This is the per-optimizer-step token count across all ranks. The 30 B
-training run is `30e9 / 524_288 ≈ 57,220` optimizer steps — which is
-where `SchedulerConfig.total_steps = 57_220` comes from.
+This is the per-optimizer-step token count across all ranks. The 30 B training run is `30e9 / 524_288 ≈ 57,220` optimizer steps — which is where `SchedulerConfig.total_steps = 57_220` comes from.
 
 #### The three optimization flags
 
@@ -303,10 +275,7 @@ where `SchedulerConfig.total_steps = 57_220` comes from.
 | `moe_mixed_precision` | `DeepSeekMoE.use_mixed_precision` | True | `optimization.md` §MoE |
 | `torch_compile_gdn` | `GatedDeltaNetBlock.use_compile` | True | `optimization.md` §torch.compile |
 
-All three are wired in `Trainer._thread_optimization_flags`
-(`src/hymo/training/trainer.py`) at construction time. (The
-`cuda_graphs_mla` flag and its `MLABlock.use_cuda_graphs` attr were removed
-in the 2026-08-04 cleanup — no CUDA-graph capture path ever shipped.)
+All three are wired in `Trainer._thread_optimization_flags` (`src/hymo/training/trainer.py`) at construction time. (The `cuda_graphs_mla` flag and its `MLABlock.use_cuda_graphs` attr were removed in the 2026-08-04 cleanup — no CUDA-graph capture path ever shipped.)
 
 ### 2.5 `RunConfig`
 
@@ -323,11 +292,7 @@ class RunConfig:
 |---|---|
 | `name` non-empty | `ValueError` |
 
-The earlier `seed` / `log_dir` / `eval_dir` / `distributed` /
-`deterministic` / `resume_from` fields were removed in the 2026-08-04
-cleanup — no production code read them (the trainer hardcodes
-`torch.manual_seed(0)` in the smoke driver, writes to `run.output_dir`,
-and never seeded deterministically).
+The earlier `seed` / `log_dir` / `eval_dir` / `distributed` / `deterministic` / `resume_from` fields were removed in the 2026-08-04 cleanup — no production code read them (the trainer hardcodes `torch.manual_seed(0)` in the smoke driver, writes to `run.output_dir`, and never seeded deterministically).
 
 ### 2.6 `HyMoConfig` (line 322)
 
@@ -341,8 +306,7 @@ class HyMoConfig:
     run: RunConfig = field(default_factory=RunConfig)
 ```
 
-A `default_factory=…` is used (not a mutable default) so the frozen
-instances are fresh per call.
+A `default_factory=…` is used (not a mutable default) so the frozen instances are fresh per call.
 
 ---
 
@@ -360,14 +324,9 @@ Device = torch.device | str  # alias
 Shape = tuple[int, ...]      # alias
 ```
 
-These are zero-cost at runtime — `NewType` is a function that returns
-its argument unchanged — but they make the type checker catch
-`layer_idx: int` vs `expert_idx: int` swaps. `MicroStep` and `Step` are
-distinguished so a function expecting the global step cannot silently
-receive a micro-step counter.
+These are zero-cost at runtime — `NewType` is a function that returns its argument unchanged — but they make the type checker catch `layer_idx: int` vs `expert_idx: int` swaps. `MicroStep` and `Step` are distinguished so a function expecting the global step cannot silently receive a micro-step counter.
 
-`Path` is re-exported from `pathlib` so a `Path | str` union is
-unambiguous.
+`Path` is re-exported from `pathlib` so a `Path | str` union is unambiguous.
 
 ---
 
@@ -387,8 +346,7 @@ def load_config(path: str | Path) -> HyMoConfig:
     return _build_config(raw)
 ```
 
-File-not-found and YAML-parse errors are wrapped with the path in the
-message, so a bad config surfaces immediately with the right context.
+File-not-found and YAML-parse errors are wrapped with the path in the message, so a bad config surfaces immediately with the right context.
 
 ### 4.2 `_build_config(raw)` (line 373)
 
@@ -405,21 +363,16 @@ def _build_config(raw: dict[str, Any]) -> HyMoConfig:
                       training=training, run=run)
 ```
 
-A `TypeError` from a sub-config is wrapped as
-`ValueError("Unknown / wrong-type config field: ...")`.
+A `TypeError` from a sub-config is wrapped as `ValueError("Unknown / wrong-type config field: ...")`.
 
 ### 4.3 `_filter(raw, cls)` (line 403)
 
 **Two things happen here**:
 
 1. **Field-name filtering** — keys not in `cls.__dataclass_fields__` are
-   silently dropped. This means a stale or typo'd field in the YAML
-   doesn't fail; it just gets ignored. (Trade-off: typos are quiet,
-   but old configs keep loading as fields evolve.)
+   silently dropped. This means a stale or typo'd field in the YAML doesn't fail; it just gets ignored. (Trade-off: typos are quiet, but old configs keep loading as fields evolve.)
 2. **Tuple coercion** — if a field is declared as `tuple[...]`, the
-   value is wrapped via `tuple(v)` so a YAML list `[0.3, 0.1]` becomes
-   `(0.3, 0.1)`. This is what makes `mtp_loss_weights: [0.3, 0.1]`
-   work in YAML.
+   value is wrapped via `tuple(v)` so a YAML list `[0.3, 0.1]` becomes `(0.3, 0.1)`. This is what makes `mtp_loss_weights: [0.3, 0.1]` work in YAML.
 
 ```python
 def _filter(raw: dict[str, Any], cls: type) -> dict[str, Any]:
@@ -449,11 +402,9 @@ def save_config(config: HyMoConfig, path: str | Path) -> None:
         yaml.safe_dump(_to_dict(config), f, sort_keys=False, default_flow_style=False)
 ```
 
-`sort_keys=False` keeps the YAML in declaration order so the saved
-file is human-diffable against the original.
+`sort_keys=False` keeps the YAML in declaration order so the saved file is human-diffable against the original.
 
-`_to_dict(obj)` (line 337) is a recursive dataclass → plain-dict
-converter, with the same `tuple` coercion as the inverse `_filter`.
+`_to_dict(obj)` (line 337) is a recursive dataclass → plain-dict converter, with the same `tuple` coercion as the inverse `_filter`.
 
 ### 4.5 `derive_config(base, ...)` (line 427)
 
@@ -469,16 +420,13 @@ def derive_config(base, *, model=None, optimizer=None, scheduler=None,
     )
 ```
 
-This is the function the eval/ablation framework was going to use; the
-in-repo `ablations/` package was removed in the 2026-08-04 cleanup (see
-`../training.md` §2).
+This is the function the eval/ablation framework was going to use; the in-repo `ablations/` package was removed in the 2026-08-04 cleanup (see `../training.md` §2).
 
 ---
 
 ## 5. Cross-field validation — `core/config_validation.py`
 
-`__post_init__` checks fields **within a sub-config**. Cross-field
-checks (one config vs another) live in `validate_full_config`:
+`__post_init__` checks fields **within a sub-config**. Cross-field checks (one config vs another) live in `validate_full_config`:
 
 ```python
 def validate_full_config(config: HyMoConfig) -> None:
@@ -529,15 +477,13 @@ from hymo.core.config import derive_config
 ablation = derive_config(config, model=derive_config.model)  # actually use replace(ModelConfig, ...)
 ```
 
-See `model-architecture.md` for step 3, and
-`../training.md` for steps 4–5.
+See `model-architecture.md` for step 3, and `../training.md` for steps 4–5.
 
 ---
 
 ## 7. Worked example — reading a 750m config
 
-The full default config is 92 lines. The most useful 10 lines to read
-first:
+The full default config is 92 lines. The most useful 10 lines to read first:
 
 ```yaml
 model:
@@ -553,73 +499,39 @@ model:
   mtp_loss_weights: [0.3, 0.1]
 ```
 
-Everything else is either a derived value (e.g. `n_mla_layers = 8`),
-a known-good default (e.g. `tie_embeddings: true`, `logit_softcap: 15.0`),
-or an optimization knob (the 4 flags).
+Everything else is either a derived value (e.g. `n_mla_layers = 8`), a known-good default (e.g. `tie_embeddings: true`, `logit_softcap: 15.0`), or an optimization knob (the 4 flags).
 
 ---
 
 ## 8. Interview Q&A
 
-**Q1. Why are config classes `@dataclass(frozen=True)` and not regular
-classes?**
+**Q1. Why are config classes `@dataclass(frozen=True)` and not regular classes?**
 
-> A: Two reasons. First, frozen instances are hashable, so they can be
-> used as dict keys / in sets (useful for caching and identifying runs
-> in W&B). Second, and more important: a training loop that mutates
-> `config.scheduler.total_steps = …` mid-run should be a hard error,
-> not a silent bug. `frozen=True` makes accidental mutation impossible
-> — you must use `dataclasses.replace` to derive a new config.
+> A: Two reasons. First, frozen instances are hashable, so they can be used as dict keys / in sets (useful for caching and identifying runs in W&B). Second, and more important: a training loop that mutates `config.scheduler.total_steps = …` mid-run should be a hard error, not a silent bug. `frozen=True` makes accidental mutation impossible — you must use `dataclasses.replace` to derive a new config.
 
 **Q2. Why is `core` PyTorch-free?**
 
-> A: It keeps the config system importable from a CPU-only CI runner, a
-> config-lint script, or a notebook, without paying the ~1-second
-> `import torch` cost. The dependency rule (`core ← utils ← …`) is
-> enforced by `AGENTS.md`; a `from torch import …` in `core/` is a
-> hard don't.
+> A: It keeps the config system importable from a CPU-only CI runner, a config-lint script, or a notebook, without paying the ~1-second `import torch` cost. The dependency rule (`core ← utils ← …`) is enforced by `AGENTS.md`; a `from torch import …` in `core/` is a hard don't.
 
-**Q3. Why does `qk_rope + qk_nope == head_dim` get checked twice
-(`__post_init__` and `validate_full_config`)?**
+**Q3. Why does `qk_rope + qk_nope == head_dim` get checked twice (`__post_init__` and `validate_full_config`)?**
 
-> A: Defense in depth. `__post_init__` runs when any sub-config is
-> constructed (e.g. in a test that builds a `ModelConfig()` directly).
-> `validate_full_config` runs after `load_config` and adds the
-> *invariant* check (the 25% ratio). The second check is a bit
-> redundant for the `__post_init__` case, but it ensures the
-> validation is part of the load sequence regardless of how the config
-> was built.
+> A: Defense in depth. `__post_init__` runs when any sub-config is constructed (e.g. in a test that builds a `ModelConfig()` directly). `validate_full_config` runs after `load_config` and adds the *invariant* check (the 25% ratio). The second check is a bit redundant for the `__post_init__` case, but it ensures the validation is part of the load sequence regardless of how the config was built.
 
 **Q4. The plan called for `vocab_size = 64_256`. Why 64 k + 256?**
 
-> A: 64 K is a standard BPE vocabulary for English + code; the
-> additional 256 are byte-level fallback tokens. Any input can be
-> losslessly encoded as a sequence of bytes, so the model can never
-> produce an `OOV` (out-of-vocabulary) token. The combined 64,256 is
-> what the tokenizer's `ExtendedTokenizer` emits (see
-> `../training.md` §Tokenizer).
+> A: 64 K is a standard BPE vocabulary for English + code; the additional 256 are byte-level fallback tokens. Any input can be losslessly encoded as a sequence of bytes, so the model can never produce an `OOV` (out-of-vocabulary) token. The combined 64,256 is what the tokenizer's `ExtendedTokenizer` emits (see `../training.md` §Tokenizer).
 
 **Q5. Where does the `57,220` step count come from?**
 
-> A: It's derived from the 30 B-token training budget divided by
-> `per_step_tokens = 524,288`. `30e9 / 524_288 ≈ 57,220`. The
-> relationship is asserted by `_validate_total_steps_consistency`.
+> A: It's derived from the 30 B-token training budget divided by `per_step_tokens = 524,288`. `30e9 / 524_288 ≈ 57,220`. The relationship is asserted by `_validate_total_steps_consistency`.
 
 **Q6. How do you add a new config field safely?**
 
-> A: Add the field to the dataclass with a default value (so old YAML
-> files still load). Add a `__post_init__` check if it has invariants.
-> Add a unit test that builds the config with the new field and one
-> without. The `key in valid` filter in `_filter` means a missing
-> field just gets its default; an extra field gets silently dropped.
+> A: Add the field to the dataclass with a default value (so old YAML files still load). Add a `__post_init__` check if it has invariants. Add a unit test that builds the config with the new field and one without. The `key in valid` filter in `_filter` means a missing field just gets its default; an extra field gets silently dropped.
 
 **Q7. Why `total_steps: Step = Step(57_220)` instead of `int`?**
 
-> A: `Step` is a `NewType` over `int`, so it's zero-cost at runtime but
-> the type checker knows the difference between a `Step` (global
-> optimizer step) and a `MicroStep` (per-accumulation counter). In
-> practice, this catches bugs like `scheduler.get_factor(micro_step)`
-> (which should be `step + 1`) at static-analysis time.
+> A: `Step` is a `NewType` over `int`, so it's zero-cost at runtime but the type checker knows the difference between a `Step` (global optimizer step) and a `MicroStep` (per-accumulation counter). In practice, this catches bugs like `scheduler.get_factor(micro_step)` (which should be `step + 1`) at static-analysis time.
 
 ---
 

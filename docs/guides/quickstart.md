@@ -1,8 +1,6 @@
 # HyMo — Quickstart
 
-> How to install HyMo, run the test suite and gates, and make a first forward
-> pass with the ~750 M-active model config. The canonical layout overview and
-> reading orders live in [docs/README.md](../README.md).
+> How to install HyMo, run the test suite and gates, and make a first forward pass with the ~750 M-active model config. The canonical layout overview and reading orders live in [docs/README.md](../README.md).
 
 ## Installation
 
@@ -49,12 +47,7 @@ ruff check src/hymo             # lint gate
 
 ## Configuration
 
-All hyperparameters live in YAML configs under `configs/`. The primary config
-is `configs/hymo_750m.yaml`, organized into 5 frozen dataclass groups
-(`ModelConfig`, `OptimizerConfig`, `SchedulerConfig`, `TrainingConfig`,
-`RunConfig`). See [references/config.md](../references/config.md) for the
-full field reference and [training.md](../training.md) for the training
-pipeline.
+All hyperparameters live in YAML configs under `configs/`. The primary config is `configs/hymo_750m.yaml`, organized into 5 frozen dataclass groups (`ModelConfig`, `OptimizerConfig`, `SchedulerConfig`, `TrainingConfig`, `RunConfig`). See [references/config.md](../references/config.md) for the full field reference and [training.md](../training.md) for the training pipeline.
 
 ## References
 

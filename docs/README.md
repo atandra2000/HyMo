@@ -1,17 +1,10 @@
 # HyMo — Documentation Index
 
-> Reading-order guide for the HyMo documentation (canonical layout:
-> `concepts/` for theory and architecture, `references/` for API + config,
-> `guides/` for how-tos, `training.md` for the training pipeline).
+> Reading-order guide for the HyMo documentation (canonical layout: `concepts/` for theory and architecture, `references/` for API + config, `guides/` for how-tos, `training.md` for the training pipeline).
 
-**Audience:** the author (interview preparation + self-mastery), with a
-motivated reader who has linear algebra + calculus but no transformer
-background as the secondary audience. Docs are **concept-first,
-code-anchored, formula-driven**; no hand-waving, no fabricated paths.
+**Audience:** the author (interview preparation + self-mastery), with a motivated reader who has linear algebra + calculus but no transformer background as the secondary audience. Docs are **concept-first, code-anchored, formula-driven**; no hand-waving, no fabricated paths.
 
-**Source of truth:** the code in `src/hymo/` at the HEAD commit. When the
-code changes a fact a doc cites, the doc is updated in the same commit
-(no stale doc commits).
+**Source of truth:** the code in `src/hymo/` at the HEAD commit. When the code changes a fact a doc cites, the doc is updated in the same commit (no stale doc commits).
 
 ---
 
@@ -60,8 +53,7 @@ code changes a fact a doc cites, the doc is updated in the same commit
 ## Conventions
 
 - **`file.py:Symbol` anchors** in every doc are verified against the code at
-  the HEAD commit by `tests/test_doc_refs.py` (symbols resolve via import;
-  line-number anchors are not used).
+  the HEAD commit by `tests/test_doc_refs.py` (symbols resolve via import; line-number anchors are not used).
 - **Blockquotes** highlight plan-vs-implementation drift — if a design doc
   says one thing and the code does another, the blockquote says so.
 - **No fabricated paths.** A doc that references `data/prepare_data.py`
@@ -72,17 +64,10 @@ code changes a fact a doc cites, the doc is updated in the same commit
 ## History
 
 - **2026-08-05 — canonical documentation layout.** `learning_docs/`
-  (6 chapters) and the process docs (`PHASE_1_DELIVERY.md`,
-  `HyMo-Roadmap.md`, `docs/superpowers/`) were removed. The corpus was
-  consolidated into the canonical layout above. The roadmap's 2-line
-  status: Phase 1–4 implementation shipped (with the 2026-08-04 cleanup
-  trimming test-only `eval/`/`ablations/`/data-pipeline modules), the
-  30B-token pre-training run remains the v1.0 milestone.
+  (6 chapters) and the process docs (`PHASE_1_DELIVERY.md`, `HyMo-Roadmap.md`, `docs/superpowers/`) were removed. The corpus was consolidated into the canonical layout above. The roadmap's 2-line status: Phase 1–4 implementation shipped (with the 2026-08-04 cleanup trimming test-only `eval/`/`ablations/`/data-pipeline modules), the 30B-token pre-training run remains the v1.0 milestone.
 
 ## Test counts (live, not historical)
 
-**226 tests collected (2026-08-05): 191 passed / 35 skipped.** Default
-`pytest` skips the GPU-gated tests (heavy model construction, CUDA-required,
-Triton-not-available); `pytest --run-heavy` runs all 226.
+**226 tests collected (2026-08-05): 191 passed / 35 skipped.** Default `pytest` skips the GPU-gated tests (heavy model construction, CUDA-required, Triton-not-available); `pytest --run-heavy` runs all 226.
 
 Re-run command: `cd /Users/atandrabharati/Desktop/CoreProjects/LLM/HyMo && python3 -m pytest -q --tb=no 2>&1 | tail -3`.

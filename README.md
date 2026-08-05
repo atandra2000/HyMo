@@ -18,9 +18,7 @@
 
 ## Documentation
 
-The full corpus lives under [`docs/`](docs/README.md) — reading orders, the
-model walkthrough, mechanism deep-dives, the design doc, config/API
-references, and the training pipeline. Quick links:
+The full corpus lives under [`docs/`](docs/README.md) — reading orders, the model walkthrough, mechanism deep-dives, the design doc, config/API references, and the training pipeline. Quick links:
 
 - [`docs/guides/quickstart.md`](docs/guides/quickstart.md) — install, first forward pass, tests and gates
 - [`docs/concepts/model-architecture.md`](docs/concepts/model-architecture.md) — the code walkthrough
@@ -122,8 +120,7 @@ All hyperparameters live in YAML configs under `configs/`. The primary config is
 
 Every field, validation rule, and the derivation helper are documented in
 [`docs/references/config.md`](docs/references/config.md). Derive config
-variants via `hymo.core.config.derive_config()` (e.g.
-`dataclasses.replace` on sub-configs).
+variants via `hymo.core.config.derive_config()` (e.g. `dataclasses.replace` on sub-configs).
 
 ---
 

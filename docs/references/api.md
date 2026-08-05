@@ -1,9 +1,6 @@
 # HyMo — API Reference
 
-> The public model and trainer API surface: the top-level factory, the model
-> classes, the trainer, and the optimization/checkpoint/validation entry
-> points. Full config-field tables live in [config.md](config.md); the
-> line-by-line walkthrough is [concepts/model-architecture.md](../concepts/model-architecture.md).
+> The public model and trainer API surface: the top-level factory, the model classes, the trainer, and the optimization/checkpoint/validation entry points. Full config-field tables live in [config.md](config.md); the line-by-line walkthrough is [concepts/model-architecture.md](../concepts/model-architecture.md).
 
 ## Top-level package (`src/hymo/__init__.py`)
 
@@ -40,9 +37,7 @@
 ### `GatedDeltaNetBlock` methods
 
 - `forward(x)` — full block forward; dispatches to the Triton kernel
-  (`triton_gated_delta_rule`) when `use_triton` and CUDA, else the eager
-  `_gated_delta_rule` recurrence. `torch.compile`-wrapped when
-  `use_compile` and CUDA.
+  (`triton_gated_delta_rule`) when `use_triton` and CUDA, else the eager `_gated_delta_rule` recurrence. `torch.compile`-wrapped when `use_compile` and CUDA.
 - `_gated_delta_rule(v, b, c, g, A_log)` — eager PyTorch reference.
 - `_kernel_out(...)` — the wrapper into the Triton kernel.
 - Properties: `n_heads`, `d_inner`, `d_state`, `headdim`.
@@ -70,8 +65,7 @@
 | `save(tag=None)` / `load(path)` | DCP checkpoint write/read |
 | `_update_moe_gate_biases()` | Fires the MoE EMA update after each optimizer step |
 
-`train_step_result` fields: `loss`, `grad_norm`, `lr_muon`, `lr_adamw`,
-`is_update`, `skipped`, `metrics`.
+`train_step_result` fields: `loss`, `grad_norm`, `lr_muon`, `lr_adamw`, `is_update`, `skipped`, `metrics`.
 
 ## Optimizer / scheduler / FSDP / partition
 
@@ -91,8 +85,7 @@
 ## Checkpoint and validation
 
 - `save_checkpoint(path, model, optimizers, scheduler, state)` /
-  `load_checkpoint(...)` — DCP-based with RNG capture
-  (`src/hymo/training/checkpoint.py`).
+  `load_checkpoint(...)` — DCP-based with RNG capture (`src/hymo/training/checkpoint.py`).
 - `compute_validation_loss(...)` / `get_val_batch(...)` / `ValMetrics`
   (`src/hymo/training/validation.py`).
 - `build_val_set(target_tokens=450_000_000, ...)` — builds the held-out
@@ -101,8 +94,7 @@
 ## Tokenizer
 
 - `ExtendedTokenizer` — BPE-64k + 256-byte fallback wrapper with
-  `encode`/`decode`/`vocab_size`/`eos_token_id`/`pad_token_id`
-  (`src/hymo/data/tokenizer.py:ExtendedTokenizer`).
+  `encode`/`decode`/`vocab_size`/`eos_token_id`/`pad_token_id` (`src/hymo/data/tokenizer.py:ExtendedTokenizer`).
 - `train_bpe_tokenizer(texts, *, vocab_size=64_000, output_path=...)` —
   BPE training entry point.
 

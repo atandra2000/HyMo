@@ -2,19 +2,11 @@
 
 > Version: v1.0 (pre-training). This is the original architecture & design document, moved as-is.
 
-> **Version:** v1.0 (pre-training). The 4 parallel ablations described in §8/§16 are deferred to **v1.1** and do not block the primary pre-training deliverable.
-> **Status:** Architecture & design specification, July 2026. *(Plan-time document; see "Design vs. implementation" notes below for where the shipped code diverged.)*
-> **Compute target:** 4× A100 80GB SXM (RunPod), FSDP-2, BF16, **5-7 day wall-clock** for the primary 30B-token pre-training run.
-> **Primary scale:** 750M active / 1.86B stored, 32 layers (3:1 GDN:MLA), **30B training tokens at 40× params-in-tokens** (Llama-3 / DeepSeek-V3 frontier practice).
-> **Quality target:** held-out FineWeb-Edu PPL ≤ 2.10, on par with MobileMoE-0.9B class.
-> **Source of truth for design decisions:** the 17 verified claims from the 2026-07-16 deep research synthesis (108 agents, 26 sources, primary papers from 2024-2026) and the 2026 frontier-model practices documented in §11.
+> **Version:** v1.0 (pre-training). The 4 parallel ablations described in §8/§16 are deferred to **v1.1** and do not block the primary pre-training deliverable. **Status:** Architecture & design specification, July 2026. *(Plan-time document; see "Design vs. implementation" notes below for where the shipped code diverged.)* **Compute target:** 4× A100 80GB SXM (RunPod), FSDP-2, BF16, **5-7 day wall-clock** for the primary 30B-token pre-training run. **Primary scale:** 750M active / 1.86B stored, 32 layers (3:1 GDN:MLA), **30B training tokens at 40× params-in-tokens** (Llama-3 / DeepSeek-V3 frontier practice). **Quality target:** held-out FineWeb-Edu PPL ≤ 2.10, on par with MobileMoE-0.9B class. **Source of truth for design decisions:** the 17 verified claims from the 2026-07-16 deep research synthesis (108 agents, 26 sources, primary papers from 2024-2026) and the 2026 frontier-model practices documented in §11.
 
 > ### Design vs. implementation (as of commit `af89c48`)
 >
-> Several §12a optimization choices were **resolved differently** during
-> implementation than the original plan anticipated. Where this document
-> says one thing and the code does another, **the code wins**, and the
-> current docs to consult are:
+> Several §12a optimization choices were **resolved differently** during implementation than the original plan anticipated. Where this document says one thing and the code does another, **the code wins**, and the current docs to consult are:
 >
 > | § | Plan said | Shipped as | Truth lives in |
 > |---|-----------|------------|----------------|
@@ -25,10 +17,7 @@
 > | §5.2 / optimizer partition | MoE-excluded NorMuon | Implemented as the `ParameterPartition` in `src/hymo/training/partition.py` (`goes_to_adamw`, `partition_parameters`). | [`../training.md`](../training.md) §Optimizer |
 > | EMA gate-bias (MoE aux-loss-free) | "EMA on MoE gate bias" | Implemented in `src/hymo/models/moe.py::DeepSeekMoE.update_gate_bias`; alpha = 0.02 default; speed = 0.001. | [`docs/gdn-and-mla.md`](gdn-and-mla.md) |
 >
-> If you are reading this document for an interview or to teach, the
-> **shaped choices** (3:1 ratio, partial-RoPE, MQA-4, MoE-on-MLA-only,
-> μP init, WSD, cautious WD) are unchanged. The implementation details
-> in §12a are what diverged.
+> If you are reading this document for an interview or to teach, the **shaped choices** (3:1 ratio, partial-RoPE, MQA-4, MoE-on-MLA-only, μP init, WSD, cautious WD) are unchanged. The implementation details in §12a are what diverged.
 
 ---
 
@@ -476,33 +465,16 @@ YaRN-style extension is a + feature. HyMo trains at T=4096 and validates at T=40
 
 ## 4. Initialization
 
-> **Status note (2026-08-04):** the μP init module described in earlier
-> drafts (`src/hymo/models/init.py`, `mup_init` / `zero_init_predicate`)
-> was **never wired into the production path** — `build_hymo` constructs
-> `HyMo(config.model)` and applies no init pass. It was removed in the
-> cleanup. The shipped model uses PyTorch module defaults plus two inline
-> choices:
+> **Status note (2026-08-04):** the μP init module described in earlier drafts (`src/hymo/models/init.py`, `mup_init` / `zero_init_predicate`) was **never wired into the production path** — `build_hymo` constructs `HyMo(config.model)` and applies no init pass. It was removed in the cleanup. The shipped model uses PyTorch module defaults plus two inline choices:
 
 1. **MoE gate** (in `moe.py`): `gate.bias = 0`, `gate.weight ~ N(0, 0.006²)`.
-   The zero bias is critical for routing stability: with a zero gate bias
-   the first few hundred tokens all go to the top-2 experts in the random
-   tie-break, the running-bias update (`moe.py:update_gate_bias`)
-   establishes a stable load profile, and routing converges within ~1k
-   steps.
+   The zero bias is critical for routing stability: with a zero gate bias the first few hundred tokens all go to the top-2 experts in the random tie-break, the running-bias update (`moe.py:update_gate_bias`) establishes a stable load profile, and routing converges within ~1k steps.
 2. **GDN recurrence params** (in `gdn.py`): `A_log = log(1..n_heads)`
-   (so `A = -exp(A_log)` is a gentle per-head decay), `dt_bias = 0`,
-   `D = ones`. No optimizer-side `no_weight_decay` special-casing exists;
-   these params decay like any other.
+   (so `A = -exp(A_log)` is a gentle per-head decay), `dt_bias = 0`, `D = ones`. No optimizer-side `no_weight_decay` special-casing exists; these params decay like any other.
 
-**Why no μP init ships:** the LR schedule (NorMuon `0.02`, AdamW `3e-4`)
-was tuned on the default-init model. Enabling μP would require re-tuning.
-The μP design (scaling rules, zero-init keyword set) is preserved in git
-history for a future Phase if the first run shows init-scale instability.
+**Why no μP init ships:** the LR schedule (NorMuon `0.02`, AdamW `3e-4`) was tuned on the default-init model. Enabling μP would require re-tuning. The μP design (scaling rules, zero-init keyword set) is preserved in git history for a future Phase if the first run shows init-scale instability.
 
-**Init is applied identically on every rank:** FSDP-2 shards after the
-first forward; since there is no custom init pass, every rank constructs
-the same default-initialized parameters (same seed) and no broadcast
-check is needed.
+**Init is applied identically on every rank:** FSDP-2 shards after the first forward; since there is no custom init pass, every rank constructs the same default-initialized parameters (same seed) and no broadcast check is needed.
 
 ---
 
@@ -925,14 +897,7 @@ Compare:
 
 ### 10.3 Tests
 
-> **Test style (hard rule):** No test may build the full 1.86 B-parameter
-> model in the default run. Default tests use the tiny (~760 K-param) config
-> (`tiny_hymo_model` / `tiny_hymo_config` fixtures, or the `ModelConfig()`
-> shadow in `tests/unit/test_models.py`). Any test that constructs the
-> production model MUST be marked `@pytest.mark.heavy` and is auto-skipped
-> unless `pytest --run-heavy` is passed (CI / GPU pod only). Production-scale
-> arithmetic (e.g. 384 expert weights, 32 layers, 465 M sharded params) lives
-> behind `heavy`. See `AGENTS.md` for the full rules.
+> **Test style (hard rule):** No test may build the full 1.86 B-parameter model in the default run. Default tests use the tiny (~760 K-param) config (`tiny_hymo_model` / `tiny_hymo_config` fixtures, or the `ModelConfig()` shadow in `tests/unit/test_models.py`). Any test that constructs the production model MUST be marked `@pytest.mark.heavy` and is auto-skipped unless `pytest --run-heavy` is passed (CI / GPU pod only). Production-scale arithmetic (e.g. 384 expert weights, 32 layers, 465 M sharded params) lives behind `heavy`. See `AGENTS.md` for the full rules.
 
 - `tests/test_moe_expert_excluded_from_nor_muon.py` — regression test for the optimizer partition (default-run: asserts on the tiny model; heavy variant checks 128 expert tensors = 16×8×3)
 - `tests/test_partial_rope.py` — verify RoPE is applied to 25% of head_dim

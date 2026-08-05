@@ -129,12 +129,15 @@ class MultiHeadLatentAttention(nn.Module):
         try:
             out = F.scaled_dot_product_attention(
                 q_sdpa, k_sdpa, v_sdpa,
+                is_causal=True,
                 enable_gqa=True,
             )
         except (TypeError, RuntimeError):
             k_sdpa = k_sdpa.repeat_interleave(heads_per_group, dim=1)
             v_sdpa = v_sdpa.repeat_interleave(heads_per_group, dim=1)
-            out = F.scaled_dot_product_attention(q_sdpa, k_sdpa, v_sdpa)
+            out = F.scaled_dot_product_attention(
+                q_sdpa, k_sdpa, v_sdpa, is_causal=True
+            )
         out = out.permute(0, 2, 1, 3).contiguous().view(B, T, H * D_v)
         y = self.wo(out)
         return cast(torch.Tensor, y)

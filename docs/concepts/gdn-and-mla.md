@@ -168,6 +168,71 @@ The `chunk_size = 64` gives `T / 64 = 64` chunks per forward; the per-chunk matm
 - [`concepts/gdn-and-mla.md`](gdn-and-mla.md) —
   why GDN + MLA, not just one.
 
+## Multi-Head Latent Attention (MLA)
+
+### Learning objectives
+
+After this section, you can:
+
+1. Derive the low-rank KV compression bottleneck ($d_c = 128$) and explain how it compresses KV cache memory during inference.
+2. Explain the MQA-4 grouping (16 query heads, 4 KV groups) and why it avoids full matrix materialization.
+3. Detail the decoupled partial-RoPE mechanism ($d_R = 32$, $d_{\text{nope}} = 96$) and why position embeddings are applied only to the decoupled 25% slice.
+4. Walk through `F.scaled_dot_product_attention(..., is_causal=True)` and explain why causal masking is mandatory for autoregressive language modeling.
+
+### Intuition
+
+Standard Multi-Head Attention (MHA) stores full $K$ and $V$ tensors of shape $(B, T, H, D)$ per token. Across long sequences, the KV cache footprint grows linearly and dominates GPU HBM bandwidth.
+
+**Multi-Head Latent Attention (MLA)** (DeepSeek-V2/V3) compresses the $K$ and $V$ representations into a single low-rank latent vector $c_{kv} \in \mathbb{R}^{d_c}$ per token (where $d_c = 128$, much smaller than $H \times D = 16 \times 128 = 2048$):
+
+$$c_{kv} = \text{RMSNorm}(W_{kv,a} \, x)$$
+
+During forward pass, keys ($K$) and values ($V$) are derived from this compressed latent vector $c_{kv}$. 
+
+However, standard Rotary Position Embeddings (RoPE) cannot be easily applied directly inside a compressed latent vector without destroying the low-rank structure during caching. MLA solves this by splitting the key into two parts:
+1. **NoPE Key/Query ($d_{\text{nope}} = 96$)**: Derived directly from the compressed latent vector $c_{kv}$ without positional rotation.
+2. **RoPE Key/Query ($d_{\text{rope}} = 32$)**: A separate 32-dimensional positional component rotated by RoPE and concatenated to the query and key heads.
+
+### Mathematical Derivation & Tensor Shape Trace
+
+For input $x \in \mathbb{R}^{B \times T \times d}$ (where $d = 896$):
+
+#### Step 1: Query Projection & Normalization
+$$\mathbf{c}_q = \text{RMSNorm}(W_{q,a} \, x) \in \mathbb{R}^{B \times T \times 224}$$
+$$q = W_{q,b} \, \mathbf{c}_q \in \mathbb{R}^{B \times T \times (H \cdot (d_R + d_{\text{nope}}))}$$
+where $H=16$, $d_R=32$, $d_{\text{nope}}=96$. Split $q$ into non-positional $q_{\text{nope}} \in \mathbb{R}^{B \times T \times H \times 96}$ and positional $q_{\text{rope}} \in \mathbb{R}^{B \times T \times H \times 32}$.
+
+Apply RoPE to $q_{\text{rope}}$:
+$$q_{\text{rope, rot}} = \text{RoPE}(q_{\text{rope}}) \in \mathbb{R}^{B \times T \times H \times 32}$$
+
+#### Step 2: Key/Value Compression & Decoupled Projection
+$$\mathbf{c}_{kv}, k_{\text{rope}} = \text{split}(W_{kv,a} \, x, [128, 32])$$
+$$\mathbf{c}_{kv, \text{norm}} = \text{RMSNorm}(\mathbf{c}_{kv}) \in \mathbb{R}^{B \times T \times 128}$$
+$$kv_{\text{out}} = W_{kv,b} \, \mathbf{c}_{kv, \text{norm}} \in \mathbb{R}^{B \times T \times G \times (d_{\text{nope}} + d_v)}$$
+where $G = 4$ KV groups ($H/G = 4$ query heads per KV group), $d_{\text{nope}} = 96$, $d_v = 128$.
+
+Split $kv_{\text{out}}$ into $k_{\text{nope}} \in \mathbb{R}^{B \times T \times 4 \times 96}$ and $v \in \mathbb{R}^{B \times T \times 4 \times 128}$.
+
+Apply RoPE to $k_{\text{rope}}$:
+$$k_{\text{rope, rot}} = \text{RoPE}(k_{\text{rope}} \cdot \mathbf{\gamma}_k) \in \mathbb{R}^{B \times T \times 4 \times 32}$$
+
+#### Step 3: Head Assembly & Causal Scaled Dot-Product Attention
+Concatenate positional and non-positional components:
+$$q_{\text{assembled}} = [q_{\text{rope, rot}} \, ; \, q_{\text{nope}}] \in \mathbb{R}^{B \times H \times T \times 128}$$
+$$k_{\text{assembled}} = [k_{\text{rope, rot}} \, ; \, k_{\text{nope}}] \in \mathbb{R}^{B \times G \times T \times 128}$$
+$$v_{\text{sdpa}} = v \in \mathbb{R}^{B \times G \times T \times 128}$$
+
+Execute PyTorch native SDPA with Grouped Query Attention (GQA) and explicit causal masking:
+$$\text{Out} = \text{F.scaled\_dot\_product\_attention}(q_{\text{assembled}}, k_{\text{assembled}}, v_{\text{sdpa}}, \text{is\_causal}=\text{True}, \text{enable\_gqa}=\text{True})$$
+
+Output projection:
+$$y = W_o (\text{Out}) \in \mathbb{R}^{B \times T \times d}$$
+
+### Implementation in HyMo
+
+- `src/hymo/models/mla.py:MultiHeadLatentAttention` — `class MultiHeadLatentAttention`.
+- `src/hymo/models/mla.py:MLABlock` — `class MLABlock` combining MLA attention, RMSNorm, DeepSeekMoE, and residual connections.
+- Causal Masking: `F.scaled_dot_product_attention` explicitly passes `is_causal=True` to guarantee autoregressive decoding without future token leakage.
 
 ## Mixture of Experts
 

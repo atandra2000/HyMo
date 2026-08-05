@@ -27,12 +27,12 @@ The in-training validation loop (`Trainer.evaluate`) is unchanged and covered in
 ### Table of Contents
 
 1. [Pipeline at a glance](#1-pipeline-at-a-glance)
-2. [Data config (`data_config.py`)](#2-data-config-data_configpy)
-3. [Source loaders (`sources.py`)](#3-source-loaders-sourcespy)
-4. [Tokenizer (`tokenizer.py`)](#4-tokenizer-tokenizerpy)
-5. [Sharding (`sharding.py`)](#5-sharding-shardingpy)
-6. [Validation set (`prepare_validation.py`)](#6-validation-set-prepare_validationpy)
-7. [End-to-end flow](#7-end-to-end-flow)
+2. [Tokenizer (`tokenizer.py`)](#2-tokenizer-tokenizerpy)
+3. [Validation set (`prepare_validation.py`)](#3-validation-set-prepare_validationpy)
+4. [External dataset integration (`LLM/shared_data`)](#4-external-dataset-integration-llmshared_data)
+5. [Trainer loop & loss computation](#5-trainer-loop--loss-computation)
+6. [Dual optimizer & parameter partitioning](#6-dual-optimizer--parameter-partitioning)
+7. [Distributed checkpointing (DCP)](#7-distributed-checkpointing-dcp)
 8. [Interview Q&A](#8-interview-qa)
 
 ---

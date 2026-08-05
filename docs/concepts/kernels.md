@@ -114,6 +114,38 @@ class TritonGDNFunction(torch.autograd.Function):
 The recompute trick: in the backward pass, we don't need to store the intermediate `h` state. We can recompute it from `(v, b, c, g, A_log)` — the inputs that we already saved. This halves the activation memory: instead of storing `(S, D) = 4 KB` per chunk per layer, we only store the inputs.
 
 Cost: each backward step does ~10% extra compute (recompute the `h` state) but saves ~50% of activation memory. For long sequences (`T = 4096`, `n_layers = 24`), this is ~10 GB of activations saved per micro-batch.
+### Mathematical Derivation of the Reverse-Time Backward Pass
+
+In `TritonGDNFunction.backward`, given incoming output gradients $\frac{\partial \mathcal{L}}{\partial o_t} = \text{grad\_out}_t \in \mathbb{R}^{B \times T \times H \times D}$, the kernel iterates in **reverse time** ($t = T-1 \to 0$) to compute gradients with respect to all 5 input tensors: $v, b, c, g, A_{\text{log}}$.
+
+#### Forward Recurrence Equations:
+$$\alpha_t = \exp(g_t \cdot A_{\text{log}})$$
+$$h_t = \alpha_t \odot h_{t-1} + b_t \otimes v_t$$
+$$o_t = c_t \cdot h_t$$
+
+#### Reverse-Time Gradient Propagation:
+Let $dh_t = \frac{\partial \mathcal{L}}{\partial h_t} \in \mathbb{R}^{S \times D}$ be the gradient of the loss with respect to the state $h_t$:
+
+$$dh_t = (c_t^\top \cdot \text{grad\_out}_t) + \alpha_{t+1} \odot dh_{t+1}$$
+
+From $dh_t$, the input gradients at timestep $t$ are derived in closed form:
+
+1. **Read-Key Gradient ($d c_t$)**:
+   $$d c_t = \text{grad\_out}_t \cdot h_t^\top \in \mathbb{R}^{S}$$
+
+2. **Value Gradient ($d v_t$)**:
+   $$d v_t = b_t^\top \cdot dh_t \in \mathbb{R}^{D}$$
+
+3. **Write-Key Gradient ($d b_t$)**:
+   $$d b_t = dh_t \cdot v_t^\top \in \mathbb{R}^{S}$$
+
+4. **Decay Gate Gradient ($d g_t$)**:
+   $$d g_t = \sum_{s, d} \left( dh_t \odot A_{\text{log}} \odot \alpha_t \odot h_{t-1} \right)$$
+
+5. **Log-Decay Weight Gradient ($d A_{\text{log}}$)**:
+   $$d A_{\text{log}} = \sum_{t=1}^T \left( dh_t \odot g_t \odot \alpha_t \odot h_{t-1} \right)$$
+
+By executing state recomputation inline during the reverse-time loop, the backward pass reads only $(v, b, c, g, A_{\text{log}})$, avoiding $O(T \cdot S \cdot D)$ state storage overhead.
 
 ## Implementation in HyMo
 

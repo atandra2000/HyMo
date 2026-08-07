@@ -1,4 +1,8 @@
-"""Public API of :mod:`hymo.models`."""
+"""Public model-building API for the HyMo architecture.
+
+Exports include the complete stack plus individual blocks for focused inspection,
+ablation, and component-level integration.
+"""
 
 from __future__ import annotations
 

@@ -19,7 +19,11 @@ __all__ = ["NorMuon", "CautiousAdamW", "build_optimizers", "Optimizers"]
 def _newton_schulz_orthogonalize(
     g: torch.Tensor, iterations: int = 5
 ) -> torch.Tensor:
-    """Newton-Schulz iterative orthogonalization to approximate matrix sign function."""
+    """Use Newton-Schulz iterations to obtain a matrix-sign-like update direction.
+
+    Normalizing before iteration keeps the polynomial stable; the original norm
+    is restored afterward so the optimizer controls magnitude separately.
+    """
     norm = g.norm()
     if norm < 1e-12:
         return g
@@ -30,7 +34,7 @@ def _newton_schulz_orthogonalize(
 
 
 class NorMuon(Optimizer):
-    """NorMuon optimizer with FP32 master weights (architecture doc §5.2)."""
+    """Muon-style optimizer for dense 2-D matrices with FP32 master copies."""
 
     def __init__(
         self,
@@ -109,7 +113,7 @@ class NorMuon(Optimizer):
 
 
 class CautiousAdamW(Optimizer):
-    """AdamW with cautious weight decay and FP32 master weights (architecture doc §5.2)."""
+    """AdamW variant whose decay can be restricted to gradient-aligned weights."""
 
     def __init__(
         self,
@@ -186,7 +190,7 @@ class CautiousAdamW(Optimizer):
 
 
 class Optimizers:
-    """Container for the dual optimizers."""
+    """Pair of optimizers used for the model's disjoint parameter partitions."""
 
     __slots__ = ("nor_muon", "adamw")
 
@@ -210,7 +214,7 @@ def build_optimizers(
     model: nn.Module,
     config: OptimizerConfig,
 ) -> Optimizers:
-    """Build the dual optimizer pair from a partitioned model."""
+    """Partition model parameters, then construct NorMuon and cautious AdamW."""
     from hymo.training.partition import partition_parameters
 
     partition = partition_parameters(model)

@@ -21,7 +21,11 @@ __all__ = ["GatedDeltaNetBlock"]
 
 
 class GatedDeltaNetBlock(nn.Module):
-    """Gated Delta Net (linear attention) block (architecture doc §2.3)."""
+    """Linear-attention block built around a gated state-space recurrence.
+
+    The eager implementation is the reference path; CUDA runs may use the
+    sanctioned Triton recurrence when the trainer enables it.
+    """
 
     def __init__(
         self, config: ModelConfig, layer_idx: int, use_rope: bool = True
@@ -97,7 +101,11 @@ class GatedDeltaNetBlock(nn.Module):
         c: torch.Tensor,
         g: torch.Tensor,
     ) -> torch.Tensor:
-        """Pure-PyTorch gated delta rule recurrence (h_t = exp(ΔA_t) * h_{t-1} + b_t * v_t)."""
+        """Evaluate the reference recurrence while keeping state in FP32.
+
+        Each head maintains an ``(state, head_dim)`` matrix; ``b`` writes to it,
+        ``c`` reads from it, and the learned decay contracts the previous state.
+        """
         B, T, H, D = v.shape
         S = b.shape[-1]
         A = -torch.exp(self.A_log.float()).view(H, S)
@@ -117,19 +125,21 @@ class GatedDeltaNetBlock(nn.Module):
         return o.to(v.dtype)
 
     def forward(self, x: torch.Tensor) -> torch.Tensor:
-        """Forward pass for the GDN block mapping (B, T, d_model) -> (B, T, d_model)."""
+        """Map ``(batch, sequence, model_dim)`` to the same shape.
+
+        CUDA uses the compiled wrapper when enabled; CPU and disabled modes use
+        the eager implementation so the reference path remains directly usable.
+        """
         if x.is_cuda and self.use_compile:
             return self._forward_compiled(self, x)
         return self._forward_eager(x)
 
     @classmethod
     def _build_compiled_forward(cls) -> Callable[..., torch.Tensor]:
-        """Return a torch.compile-wrapped _forward_eager that takes (self, x).
+        """Choose the compiled forward only when the CUDA backend is available.
 
-        Skipped on CPU: torch.compile requires the inductor triton backend,
-        which isn't usable in this environment. The CPU path runs the eager
-        implementation (default test suite). The CUDA path uses the compiled
-        version (GPU test suite under --run-heavy).
+        CPU construction must remain importable and runnable without an Inductor
+        Triton backend, so it returns the ordinary bound method in that case.
         """
         if not torch.cuda.is_available():
             return cls._forward_eager

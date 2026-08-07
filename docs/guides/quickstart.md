@@ -31,6 +31,9 @@ uv sync --all-extras
 
 ### 2.1 First forward pass (~750M active / 1.86B total)
 
+This example loads the production configuration. On a laptop, use the tiny
+configuration in section 2.2 instead of allocating the full model.
+
 ```python
 import torch
 from hymo import load_config, build_hymo
@@ -41,7 +44,8 @@ config = load_config("configs/hymo_750m.yaml")
 # 2. Instantiate the 32-layer hybrid stack
 model = build_hymo(config)
 
-# 3. Next-token forward pass
+# 3. Next-token forward pass. The output keeps batch and sequence dimensions
+# and replaces each input position with a vocabulary-sized logit vector.
 # Input: batch_size=2, seq_len=128
 tokens = torch.randint(0, config.model.vocab_size, (2, 128))
 logits = model(tokens)  # HyMo.forward returns next-token logits only
@@ -89,6 +93,9 @@ print(f"Tiny model parameter count: {model.num_parameters():,}")
 ```
 
 ### 2.3 Executing a training step
+
+`Trainer.train_step` always backpropagates the micro-batch loss, but only performs
+clipping and an optimizer update at the configured gradient-accumulation boundary.
 
 ```python
 import torch

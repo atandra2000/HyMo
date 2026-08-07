@@ -1,4 +1,8 @@
-"""Shared type aliases and semantic newtypes."""
+"""Shared type vocabulary for configuration, model, and training modules.
+
+NewTypes distinguish integer concepts such as token IDs and optimizer steps to
+make accidental interchange visible to static type checkers.
+"""
 
 from __future__ import annotations
 
@@ -7,14 +11,14 @@ from typing import NewType
 
 import torch
 
-# Semantic newtypes
+# Domain-specific integer types retain runtime compatibility with ``int``.
 TokenId = NewType("TokenId", int)
 LayerIndex = NewType("LayerIndex", int)
 ExpertIndex = NewType("ExpertIndex", int)
 MicroStep = NewType("MicroStep", int)
 Step = NewType("Step", int)
 
-# Re-exports & Aliases
+# Torch aliases are centralized here so public signatures use one vocabulary.
 DType = torch.dtype
 Device = torch.device | str
 Shape = tuple[int, ...]

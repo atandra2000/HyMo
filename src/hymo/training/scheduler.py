@@ -13,7 +13,7 @@ DecaySchedule = Literal["linear", "cosine", "sqrt"]
 
 
 class JointWSDScheduler:
-    """Joint WSD scheduler (warmup-stable-decay)."""
+    """Piecewise scheduler that warms up, holds, then decays the base LR."""
 
     def __init__(self, config: SchedulerConfig) -> None:
         self._config = config
@@ -29,7 +29,11 @@ class JointWSDScheduler:
         return self._config
 
     def get_factor(self, step: int) -> float:
-        """Return the learning rate multiplicative scaling factor for the given step."""
+        """Return the multiplicative factor for a zero-based optimizer step.
+
+        Steps after the configured schedule remain at the minimum ratio rather
+        than continuing below the requested floor.
+        """
         if step < self.warmup_steps:
             return step / max(self.warmup_steps, 1)
 
@@ -44,7 +48,7 @@ class JointWSDScheduler:
         return self.min_lr_ratio + (1.0 - self.min_lr_ratio) * decay_val
 
     def step(self) -> None:
-        """Advance internal scheduler step counter."""
+        """Advance the serialized optimizer-step counter by one."""
         self._step += 1
 
     def state_dict(self) -> dict[str, int]:
@@ -55,7 +59,7 @@ class JointWSDScheduler:
 
     @staticmethod
     def _decay_factor(progress: float, kind: DecaySchedule) -> float:
-        """Pure static helper to calculate decay scaling factor from progress in [0, 1]."""
+        """Map normalized decay progress to the selected curve."""
         if not 0.0 <= progress <= 1.0:
             raise ValueError(f"progress must be in [0, 1], got {progress}")
         if kind == "linear":

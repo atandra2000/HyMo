@@ -21,7 +21,11 @@ from hymo.core.types import Step
 
 @dataclass(frozen=True)
 class ModelConfig:
-    """Architectural hyperparameters for the HyMo stack (architecture doc §2.1)."""
+    """Immutable architectural settings shared by every model block.
+
+    Layer-placement properties below derive the 3:1 GDN-to-MLA schedule rather
+    than storing a second, potentially inconsistent representation.
+    """
 
     # Token + sequence
     vocab_size: int = 64_256
@@ -69,6 +73,7 @@ class ModelConfig:
     logit_softcap: float = 15.0
 
     def __post_init__(self) -> None:
+        """Reject shape combinations that would make a block impossible to build."""
         if self.vocab_size <= 0:
             raise ValueError("vocab_size must be > 0")
         if self.n_layers <= 0:
@@ -207,14 +212,17 @@ class SchedulerConfig:
 
     @property
     def warmup_steps(self) -> int:
+        """Return the integer step boundary at which warmup ends."""
         return int(self.total_steps * self.warmup_frac)
 
     @property
     def stable_steps(self) -> int:
+        """Return the number of optimizer steps at the peak learning rate."""
         return int(self.total_steps * self.stable_frac)
 
     @property
     def decay_steps(self) -> int:
+        """Return the integer length of the final learning-rate decay."""
         return int(self.total_steps * self.decay_frac)
 
 
@@ -276,7 +284,11 @@ class TrainingConfig:
 
 @dataclass(frozen=True)
 class RunConfig:
-    """Run configuration and directory names."""
+    """User-facing run identity and filesystem locations.
+
+    These values do not affect model mathematics, so they remain separate from
+    the model, optimizer, and scheduler settings.
+    """
 
     name: str = "hymo-v1.0"
     output_dir: str = "checkpoints/pretrain"
@@ -303,7 +315,7 @@ class HyMoConfig:
 
 
 def _to_dict(obj: Any) -> Any:
-    """Recursively convert a dataclass to a plain dict for YAML dumping."""
+    """Convert nested dataclasses and tuples into YAML-safe Python values."""
     if hasattr(obj, "__dataclass_fields__"):
         return {f.name: _to_dict(getattr(obj, f.name)) for f in fields(obj)}
     if isinstance(obj, (list, tuple)):
@@ -339,7 +351,7 @@ def load_config_from_dict(raw: dict[str, Any]) -> HyMoConfig:
 
 
 def _build_config(raw: dict[str, Any]) -> HyMoConfig:
-    """Construct sub-configs from a raw dict with type coercion."""
+    """Build each immutable sub-config and preserve its validation errors."""
     try:
         model = ModelConfig(**_filter(raw.get("model", {}), ModelConfig))
         optimizer = OptimizerConfig(
@@ -369,7 +381,7 @@ def _build_config(raw: dict[str, Any]) -> HyMoConfig:
 
 
 def _filter(raw: dict[str, Any], cls: type) -> dict[str, Any]:
-    """Filters dictionary keys to fields of dataclass cls and coerces types."""
+    """Keep recognized fields and normalize YAML lists used for tuple settings."""
     valid = {f.name for f in fields(cls)}
     out: dict[str, Any] = {}
     for k, v in raw.items():
@@ -385,7 +397,7 @@ def _filter(raw: dict[str, Any], cls: type) -> dict[str, Any]:
 
 
 def save_config(config: HyMoConfig, path: str | Path) -> None:
-    """Dump a HyMoConfig to a YAML file path atomically."""
+    """Serialize a config, creating its parent directory when necessary."""
     path = Path(path)
     path.parent.mkdir(parents=True, exist_ok=True)
     with path.open("w", encoding="utf-8") as f:

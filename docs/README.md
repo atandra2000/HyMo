@@ -1,6 +1,9 @@
 # HyMo — Documentation Index
 
-> Reading-order guide for the HyMo documentation (canonical layout: `concepts/` for theory and architecture, `references/` for API + config, `guides/` for how-tos, `training.md` for the training pipeline).
+> Start with a concept chapter to understand the design, use the reference pages
+> when reading code, and use the guides when operating the repository. The
+> canonical layout is `concepts/` for theory, `references/` for APIs/config,
+> `guides/` for workflows, and `training.md` for the end-to-end loop.
 
 **Audience:** the author (interview preparation + self-mastery), with a motivated reader who has linear algebra + calculus but no transformer background as the secondary audience. Docs are **concept-first, code-anchored, formula-driven**; no hand-waving, no fabricated paths.
 
@@ -51,6 +54,9 @@
 4. [`references/api.md`](references/api.md) — the API surface at a glance.
 
 ## Conventions
+
+The docs favor short explanations next to concrete code symbols: formulas explain
+mechanisms, while implementation notes call out deliberate plan/code differences.
 
 - **`file.py:Symbol` anchors** in every doc are verified against the code at
   the HEAD commit by `tests/test_doc_refs.py` (symbols resolve via import; line-number anchors are not used).

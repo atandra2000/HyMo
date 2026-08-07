@@ -1,5 +1,8 @@
-"""Public API of :mod:`hymo.data` — the tokenizer used to build the
-held-out validation set (:mod:`hymo.data.prepare_validation`)."""
+"""Data-facing public API for tokenization and validation-set preparation.
+
+The tokenizer is importable without loading the streaming dataset; the builder
+is kept in its CLI module because it performs network and filesystem I/O.
+"""
 from __future__ import annotations
 
 from hymo.data.tokenizer import BYTE_VOCAB_SIZE, ExtendedTokenizer

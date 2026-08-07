@@ -50,7 +50,7 @@ if HAS_TRITON:
         B, T, H,
         S: tl.constexpr, D: tl.constexpr,
     ) -> None:
-        """Forward kernel: one program per (batch, head)."""
+        """Advance one FP32 state matrix through time for one batch/head pair."""
         batch_idx = tl.program_id(0)
         head_idx  = tl.program_id(1)
 
@@ -103,7 +103,7 @@ if HAS_TRITON:
         S: tl.constexpr,
         D: tl.constexpr,
     ) -> None:
-        """Backward kernel: one program per (batch, head), reverse time loop."""
+        """Recompute recurrence sensitivities with a reverse-time state pass."""
         batch_idx = tl.program_id(0)
         head_idx  = tl.program_id(1)
 
@@ -241,15 +241,11 @@ def triton_gated_delta_rule(
     g: torch.Tensor,
     A_log: torch.Tensor,
 ) -> torch.Tensor:
-    """Triton-accelerated Gated Delta Rule forward+backward.
+    """Run the fused GDN recurrence with a custom autograd implementation.
 
-    Recurrence:  h_t = exp(decay_t * A) * h_{t-1} + b_t ⊗ v_t
-                 o_t = c_t · h_t
-    where A = -exp(A_log) is negative and decay >= 0, so the decay factor
-    alpha = exp(decay * A) stays in (0, 1).
-
-    S and D must be powers of 2. If not, tensors are zero-padded along those
-    dimensions before the kernel and un-padded on return.
+    The wrapper converts inputs to contiguous FP32 buffers, pads state and head
+    dimensions to Triton's power-of-two tile sizes, and removes that padding from
+    the returned output. Kernel failures are intentionally surfaced to callers.
     """
     if not HAS_TRITON:
         raise ImportError(

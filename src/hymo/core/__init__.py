@@ -1,4 +1,8 @@
-"""Public API of :mod:`hymo.core`."""
+"""Stable public API for configuration, validation, and shared types.
+
+The core package owns dependency-light configuration objects; model and training
+packages consume these objects without importing one another.
+"""
 
 from __future__ import annotations
 

@@ -15,7 +15,7 @@ __all__ = ["RotaryEmbedding"]
 
 
 class RotaryEmbedding(nn.Module):
-    """Rotary Position Embedding (RoPE) cache (Phase 2)."""
+    """Cached sinusoidal rotations for a configurable head-dimension slice."""
 
     def __init__(
         self,
@@ -49,7 +49,11 @@ class RotaryEmbedding(nn.Module):
         x: torch.Tensor,
         start_pos: int = 0,
     ) -> torch.Tensor:
-        """Apply RoPE rotation to input tensor x of shape (..., T, head_dim)."""
+        """Rotate the final ``head_dim`` axis of ``(..., T, head_dim)``.
+
+        ``start_pos`` selects the cache window, which lets callers address a
+        sequence segment without rebuilding the frequency table.
+        """
         if x.shape[-1] != self.head_dim:
             raise ValueError(
                 f"x.shape[-1] ({x.shape[-1]}) must equal "

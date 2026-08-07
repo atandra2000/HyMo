@@ -25,7 +25,11 @@ def train_bpe_tokenizer(
     vocab_size: int = _BASE_VOCAB_SIZE,
     output_path: str | Path = "data/tokens/byte_bpe_vocab.json",
 ) -> Tokenizer:
-    """Train a BPE-64k tokenizer from a list of text samples."""
+    """Train and persist a byte-aware BPE tokenizer from text samples.
+
+    The initial byte alphabet lets common UTF-8 bytes participate in merges,
+    while the extended wrapper reserves IDs for lossless unknown-token fallback.
+    """
     tokenizer = Tokenizer(BPE(unk_token="<unk>"))
     tokenizer.pre_tokenizer = pre_tokenizers.ByteLevel(add_prefix_space=True)
     trainer = BpeTrainer(
@@ -41,7 +45,11 @@ def train_bpe_tokenizer(
 def _byte_fallback_encode(
     base_tokenizer: Tokenizer, text: str
 ) -> tuple[list[int], list[str]]:
-    """Encode text to token IDs and strings with byte-level fallback for <unk>."""
+    """Encode text, replacing unknown pieces with one reserved token per UTF-8 byte.
+
+    The fallback deliberately uses the source text bytes so an unknown token does
+    not silently disappear from the encoded sequence.
+    """
     encoding = base_tokenizer.encode(text)
     ids: list[int] = []
     tokens: list[str] = []
@@ -66,7 +74,7 @@ class ExtendedTokenizer:
         self._base: Tokenizer | None = None
 
     def load(self) -> ExtendedTokenizer:
-        """Load tokenizer vocabulary and add special/fallback byte tokens."""
+        """Load the base vocabulary and append the wrapper's special and byte IDs."""
         if not self.path.exists():
             raise RuntimeError(f"Tokenizer file not found: {self.path}")
         base = Tokenizer.from_file(str(self.path))
@@ -87,7 +95,7 @@ class ExtendedTokenizer:
         return ids
 
     def decode(self, ids: list[int]) -> str:
-        """Decode token IDs back to a string, converting byte tokens back to characters."""
+        """Decode base tokens and reserved byte IDs into the original text stream."""
         if self._base is None:
             self.load()
         assert self._base is not None

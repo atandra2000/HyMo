@@ -1,4 +1,8 @@
-"""Public API of :mod:`hymo.training`."""
+"""Public training API for optimization, scheduling, checkpointing, and eval.
+
+The re-exports keep training entry points discoverable while implementation
+modules remain independently testable.
+"""
 
 from __future__ import annotations
 

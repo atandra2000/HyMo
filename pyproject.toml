@@ -31,7 +31,7 @@ classifiers = [
     "Topic :: Scientific/Engineering :: Artificial Intelligence",
 ]
 
-# Runtime deps — minimal, pinned to >= for forward compatibility
+# Runtime dependencies stay minimal; lower bounds permit compatible upgrades.
 dependencies = [
     "torch>=2.5",
     "numpy>=1.26",
@@ -41,13 +41,13 @@ dependencies = [
 ]
 
 [project.optional-dependencies]
-# Production training deps — installed only when running the primary 30B run
+# Training-only dependencies, needed for the production distributed run.
 train = [
     # "fla>=0.1",                 # fla-org GDN kernel (unavailable in standard registry)
     "triton>=3.0.0; sys_platform == 'linux'", # custom Triton kernel for GDN
     "wandb>=0.17",              # optional: W&B logging
 ]
-# Dev tooling
+# Local development and quality-gate tooling.
 dev = [
     "pytest>=8.0",
     "pytest-cov>=4.1",
@@ -61,13 +61,13 @@ Homepage = "https://github.com/atandra-bharati/hymo"
 Documentation = "https://github.com/atandra-bharati/hymo/tree/main/docs"
 
 # ----------------------------------------------------------------------
-# Hatch build config — src/ layout
+# Build configuration for the src/ layout.
 # ----------------------------------------------------------------------
 [tool.hatch.build.targets.wheel]
 packages = ["src/hymo"]
 
 # ----------------------------------------------------------------------
-# Tooling config
+# Static analysis and test-runner configuration.
 # ----------------------------------------------------------------------
 [tool.ruff]
 line-length = 100
@@ -75,7 +75,7 @@ target-version = "py311"
 src = ["src", "tests"]
 
 [tool.ruff.lint]
-# Conservative default set; expand as the project grows
+# Focused rules catch correctness and maintainability issues without style churn.
 select = [
     "E",   # pycodestyle errors
     "W",   # pycodestyle warnings
@@ -108,7 +108,7 @@ warn_return_any = true
 mypy_path = "src"
 
 [[tool.mypy.overrides]]
-# torch.* stubs are incomplete; loosen the rules there
+# Third-party stubs are incomplete, so strict checking is relaxed only for them.
 module = ["torch.*", "datasets.*", "tokenizers.*", "tqdm.*"]
 ignore_missing_imports = true
 

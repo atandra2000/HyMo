@@ -1,4 +1,4 @@
-"""FSDP-2 wrapper placeholders for Phase 1/Phase 3."""
+"""FSDP-2 integration helpers for layer-wise model sharding."""
 
 from __future__ import annotations
 
@@ -17,7 +17,7 @@ __all__ = [
 
 
 def fsdp_auto_wrap_policy(module: nn.Module, recurse: bool, non_blocking: bool) -> bool:
-    """FSDP auto-wrap policy: wrap per-layer blocks (GDN, MLA)."""
+    """Select complete GDN and MLA blocks as FSDP wrapping units."""
     from hymo.models.gdn import GatedDeltaNetBlock
     from hymo.models.mla import MLABlock
     return isinstance(module, (GatedDeltaNetBlock, MLABlock))
@@ -31,7 +31,11 @@ def wrap_model_with_fsdp(
     auto_wrap_policy: Callable[..., bool] | None = None,
     **kwargs: Any,
 ) -> nn.Module:
-    """Wrap model module inside FullyShardedDataParallel wrapper."""
+    """Wrap a model with FSDP using configured mixed-precision dtypes.
+
+    If FSDP is unavailable, return the original module so CPU-only tooling can
+    still construct and inspect a model.
+    """
     try:
         from torch.distributed.fsdp import FullyShardedDataParallel as FSDP
         from torch.distributed.fsdp import MixedPrecision

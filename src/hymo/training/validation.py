@@ -17,7 +17,7 @@ __all__ = ["get_val_batch", "compute_validation_loss", "ValMetrics"]
 
 @dataclass
 class ValMetrics:
-    """The result metrics computed over validation evaluation data."""
+    """Aggregated validation loss, perplexity, and the amount of data evaluated."""
 
     loss: float
     ppl: float
@@ -32,7 +32,7 @@ _val_cache_path: Path | None = None
 
 
 def _load_val_tokens(path: Path = DEFAULT_VAL_BIN) -> npt.NDArray[np.uint32]:
-    """Memory-map or load validation tokens from path."""
+    """Load validation tokens once per path and reuse them across evaluations."""
     global _val_cache, _val_cache_path
     if _val_cache is None or _val_cache_path != path:
         if not path.exists():
@@ -52,7 +52,7 @@ def get_val_batch(
     seed: int = 42,
     path: Path = DEFAULT_VAL_BIN,
 ) -> tuple[torch.Tensor, torch.Tensor]:
-    """Slice a deterministic validation batch from val.bin."""
+    """Return a reproducible next-token batch from the flat validation corpus."""
     tokens_np = _load_val_tokens(path)
     total_tokens = batch_size * (seq_len + 1)
 
@@ -78,7 +78,11 @@ def compute_validation_loss(
     seed: int = 42,
     val_bin_path: Path = DEFAULT_VAL_BIN,
 ) -> ValMetrics:
-    """Compute average validation cross-entropy loss and perplexity."""
+    """Average cross-entropy over held-out batches and convert it to perplexity.
+
+    Evaluation temporarily switches the model to eval mode and restores its
+    prior training mode before returning.
+    """
     was_training = model.training
     model.eval()
 

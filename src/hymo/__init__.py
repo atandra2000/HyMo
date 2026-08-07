@@ -1,7 +1,8 @@
-"""HyMo: a 750M-active hybrid GDN+MLA+MoE language model.
+"""Public entry point for the HyMo hybrid language model.
 
-Top-level package. Imports the most-used public APIs eagerly; less-used
-subpackages stay lazy to keep import-time minimal.
+The package exposes configuration loading and model construction directly;
+implementation modules remain organized under ``core``, ``models``, and
+``training`` so callers need not depend on internal paths.
 
 Conventions
 -----------

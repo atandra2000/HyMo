@@ -14,7 +14,11 @@ A100_80GB_BYTES = 80 * 1024 * 1024 * 1024
 
 
 def validate_full_config(config: HyMoConfig) -> None:
-    """Run all cross-field configuration sanity checks."""
+    """Validate relationships that individual frozen config objects cannot see.
+
+    The checks cover layer scheduling, RoPE dimensions, token accounting, and a
+    conservative per-rank memory estimate before distributed training starts.
+    """
     _validate_total_steps_consistency(config)
     _validate_layer_distribution(config.model)
     _validate_partial_rope_math(config.model)
@@ -22,6 +26,7 @@ def validate_full_config(config: HyMoConfig) -> None:
 
 
 def _validate_total_steps_consistency(config: HyMoConfig) -> None:
+    """Ensure the aggregated batch settings produce a usable token count."""
     per_step = config.training.per_step_tokens
     if per_step <= 0:
         raise ValueError(
@@ -30,6 +35,7 @@ def _validate_total_steps_consistency(config: HyMoConfig) -> None:
 
 
 def _validate_layer_distribution(model: ModelConfig) -> None:
+    """Verify that derived layer positions implement the intended 3:1 schedule."""
     if model.n_layers % 4 != 0:
         raise ValueError(
             f"n_layers ({model.n_layers}) must be a multiple of 4 for the "
@@ -49,6 +55,7 @@ def _validate_layer_distribution(model: ModelConfig) -> None:
 
 
 def _validate_partial_rope_math(model: ModelConfig) -> None:
+    """Check that the configured RoPE slice is a valid fraction of each head."""
     rope_frac = model.qk_rope_head_dim / model.head_dim
     if not 0.0 <= rope_frac <= 1.0:
         raise ValueError(
@@ -57,7 +64,11 @@ def _validate_partial_rope_math(model: ModelConfig) -> None:
 
 
 def _validate_vram_budget(model: ModelConfig, training: TrainingConfig) -> None:
-    """Estimate parameters, grads, master weights, and optimizer state VRAM to warn if rank budget is exceeded."""
+    """Estimate peak per-rank memory before allocating the production model.
+
+    The estimate intentionally errs on the conservative side because it includes
+    parameter, gradient, optimizer, activation, and all-gather contributions.
+    """
     embed = model.vocab_size * model.dim
     gdn_per = 25_000_000
     mla_attn_per = 5_800_000

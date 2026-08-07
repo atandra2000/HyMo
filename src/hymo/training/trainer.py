@@ -31,7 +31,7 @@ log = logging.getLogger(__name__)
 
 @dataclass
 class train_step_result:
-    """The result metrics of a single training step."""
+    """Metrics and update status returned by one micro-batch."""
 
     loss: float
     grad_norm: float
@@ -43,7 +43,7 @@ class train_step_result:
 
 
 class Trainer:
-    """Trainer manager class for the HyMo pre-training loop."""
+    """Coordinate forward/backward passes, dual optimizers, evaluation, and saves."""
 
     def __init__(
         self,
@@ -114,7 +114,12 @@ class Trainer:
         tokens: torch.Tensor,
         targets: torch.Tensor,
     ) -> train_step_result:
-        """Run a single forward-backward pass, optimizer step, and scheduler step."""
+        """Process one micro-batch and optionally commit an accumulated update.
+
+        The loss is always backpropagated after gradient accumulation scaling;
+        clipping, optimizer steps, LR updates, and gradient clearing occur only
+        on the final micro-step in an accumulation window.
+        """
         self.model.train()
 
         if self._has_mtp:
@@ -206,7 +211,7 @@ class Trainer:
         )
 
     def save(self, tag: str | None = None) -> Path:
-        """Save a training checkpoint directory using DCP."""
+        """Save model and training state under the configured output directory."""
         if tag is None:
             tag = f"step_{self.step}"
         output_dir = Path(self._config.run.output_dir)
@@ -230,7 +235,7 @@ class Trainer:
         return ckpt_dir
 
     def load(self, path: str | Path) -> int:
-        """Load a DCP checkpoint directory and restore training state."""
+        """Restore model state and counters, returning the resumed step."""
         p = Path(path)
 
         state = load_checkpoint(
@@ -250,7 +255,7 @@ class Trainer:
     def train(
         self, data_iter: Iterable[tuple[torch.Tensor, torch.Tensor]], max_steps: int | None = None
     ) -> None:
-        """Execute the primary training loop iteration."""
+        """Consume batches until the configured or explicitly requested step limit."""
         if max_steps is None:
             max_steps = self._config.scheduler.total_steps
 
@@ -293,7 +298,7 @@ class Trainer:
                     self.save()
 
     def evaluate(self, val_bin_path: str | Path | None = None) -> dict[str, float]:
-        """Compute evaluation metrics over the validation subset."""
+        """Evaluate held-out loss/perplexity and report metrics to the run logger."""
         training_cfg = self._config.training
         model_cfg = self._config.model
 

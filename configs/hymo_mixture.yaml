@@ -1,5 +1,5 @@
-# HyMo v1.0 data mixture configuration.
-# Target total = 30B tokens.
+# HyMo v1.0 training-corpus mixture.
+# Weights describe sampling proportions; the sharding section sets the 30B target.
 sources:
   - { id: fineweb_edu_q3, weight: 0.50 }
   - { id: fineweb,         weight: 0.14 }
@@ -16,6 +16,7 @@ train_fraction: 0.97
 val_fraction: 0.015
 test_fraction: 0.015
 
+# Packed token storage and document-boundary policy.
 sharding:
   shard_size_tokens: 50000000
   dtype: uint32
@@ -24,7 +25,7 @@ sharding:
   verify_after_pack: true
   output_dir: data/shards
 
-tokenization:
+# Token IDs written to the shards.
   name: hymo-bpe-64k
   path: data/tokens/byte_bpe_vocab.json
   vocab_size: 64256
@@ -35,14 +36,14 @@ tokenization:
   batch_size: 1024
   add_special_tokens: false
 
-dedup:
+# Content deduplication before packing.
   enabled: true
   method: sha256
   n_hash_buckets: 256
   bloom_capacity_per_bucket: 200000
   bloom_error_rate: 0.001
 
-quality:
+# Lightweight filters for low-information documents.
   drop_empty: true
   min_unique_chars_ratio: 0.05
   max_digit_ratio: 0.5

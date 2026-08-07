@@ -1,17 +1,17 @@
-# HyMo v1.0 primary configuration file.
-# Source of truth for all pre-training and model hyperparameters.
+# HyMo v1.0 primary configuration.
+# This YAML is the source of truth; frozen dataclasses validate it at load time.
 
 model:
-  # Token + sequence
+  # Vocabulary and maximum context window.
   vocab_size: 64256
   max_seq_len: 4096
   tie_embeddings: true
 
-  # Stack
+  # Hybrid block schedule and model width.
   n_layers: 32
   dim: 896
 
-  # MLA (full attention)
+  # MLA: sparse full-attention anchors with low-rank KV compression.
   n_heads: 16
   n_kv_groups: 4
   q_lora_rank: 224
@@ -22,16 +22,16 @@ model:
   v_head_dim: 128
   rope_theta: 10000.0
 
-  # GDN (linear attention)
+  # GDN: recurrent linear-attention dimensions.
   gdn_d_state: 32
   gdn_d_conv: 4
   gdn_headdim: 32
   gdn_d_inner: 1280
 
-  # NoPE-hybrid (CR-12 mitigation: disabled by default in v1.0)
+  # Optional NoPE variant for selected GDN layers; disabled in v1.0.
   nope_hybrid_gdn_enabled: false
 
-  # MoE
+  # Sparse feed-forward experts used on MLA blocks.
   n_routed_experts: 16
   n_shared_experts: 1
   n_activated_experts: 2
@@ -39,17 +39,17 @@ model:
   moe_ema_alpha: 0.02
   moe_capacity_factor: 1.5
 
-  # DenseFFN on GDN blocks
+  # GDN blocks use their dense feed-forward path; no extra knobs here.
 
-  # MTP
+  # Auxiliary heads for predicting multiple future tokens.
   mtp_depth: 2
   mtp_loss_weights: [0.3, 0.1]
   mtp_inter_dim: 2304
 
-  # Logit softcap
+  # Smoothly bounds output logits when positive.
   logit_softcap: 15.0
 
-  # Init
+  # Initialization follows module-level PyTorch defaults and model-specific gates.
 
 optimizer:
   # NorMuon (attention + GDN matrices, 2D dense)
@@ -65,9 +65,9 @@ optimizer:
   adamw_eps: 1.0e-8
   adamw_weight_decay: 0.0
 
-  # Master weight precision
+  # Optimizers keep FP32 master copies internally.
 
-  # Cautious weight decay
+  # Apply decay only where the gradient is aligned when enabled.
   cautious_wd: true
 
 scheduler:
@@ -93,12 +93,12 @@ training:
   grad_clip: 1.0
   loss_nan_skip: true
 
-  # Checkpoint + eval
+  # Checkpoint, logging, and validation cadence in optimizer steps.
   save_interval: 4000
   log_interval: 50
   eval_interval: 2000
 
-  # Optimizations
+  # Explicit opt-ins for sanctioned CUDA and mixed-precision paths.
   fused_gdn: true
   moe_mixed_precision: true
   torch_compile_gdn: true

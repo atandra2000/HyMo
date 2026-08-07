@@ -19,11 +19,10 @@ __all__ = ["MultiHeadLatentAttention", "MLABlock"]
 
 
 class MultiHeadLatentAttention(nn.Module):
-    """Multi-Head Latent Attention (MLA) with MQA-4 grouping.
+    """Latent attention with compressed KV projections and grouped heads.
 
-    Features decoupled RoPE on 25% of the head dimension and low-rank compression:
-    - Query: x -> wq_a -> RMSNorm -> wq_b -> q (split into q_nope and q_pe).
-    - KV: x -> wkv_a -> (kv_latent, k_pe), and kv_latent -> RMSNorm -> wkv_b -> (k_nope, v).
+    Queries and keys are split into RoPE and NoPE components. Keys and values
+    are produced for KV groups, then SDPA performs grouped-query attention.
     """
 
     def __init__(self, config: ModelConfig, layer_idx: int = 0) -> None:
@@ -89,7 +88,11 @@ class MultiHeadLatentAttention(nn.Module):
         return self._config.v_head_dim
 
     def forward(self, x: torch.Tensor) -> torch.Tensor:
-        """Forward pass for MLA mapping input (B, T, d) -> (B, T, d)."""
+        """Apply causal latent attention and return a ``(B, T, model_dim)`` tensor.
+
+        The grouped SDPA call avoids materializing repeated keys and values; an
+        explicit repeat is retained for PyTorch versions without GQA support.
+        """
         B, T, _ = x.shape
         H, G = self.n_heads, self.n_kv_groups
         D_pe, D_nope, D_v = (
@@ -144,7 +147,7 @@ class MultiHeadLatentAttention(nn.Module):
 
 
 class MLABlock(nn.Module):
-    """MLA Block combining latent attention, MoE feed-forward, pre-norms, and residuals."""
+    """Pre-norm MLA block followed by the routed MoE residual branch."""
 
     def __init__(self, config: ModelConfig, layer_idx: int = 0) -> None:
         super().__init__()
@@ -158,7 +161,7 @@ class MLABlock(nn.Module):
         self.moe = DeepSeekMoE(config, layer_idx=layer_idx)
 
     def forward(self, x: torch.Tensor) -> torch.Tensor:
-        """Forward pass applying pre-norm Attention followed by pre-norm MoE."""
+        """Apply attention and MoE as two independent pre-norm residual updates."""
         x = x + self.attn(self.attn_norm(x))
         x = x + self.moe(self.moe_norm(x))
         return x

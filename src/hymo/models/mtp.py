@@ -21,7 +21,7 @@ __all__ = ["MultiTokenPrediction", "MTPOutput"]
 
 
 class MTPOutput:
-    """Output tuple representing logits, targets, and loss weights for a single MTP head."""
+    """Container for one auxiliary prediction head's logits, targets, and weight."""
 
     __slots__ = ("logits", "targets", "loss_weight")
 
@@ -41,7 +41,7 @@ class MTPOutput:
 
 
 class MTPBlock(nn.Module):
-    """MTP projection block: fuses previous hidden state with shifted token embeddings."""
+    """SwiGLU projection that fuses a hidden state with a future-token embedding."""
 
     def __init__(self, dim: int, inter_dim: int) -> None:
         super().__init__()
@@ -51,7 +51,11 @@ class MTPBlock(nn.Module):
 
 
 class MultiTokenPrediction(nn.Module):
-    """MTP head orchestration using chained hidden state blocks (architecture doc §2.8)."""
+    """Chain auxiliary heads so each predicts a progressively later token.
+
+    Every head consumes the prior head's hidden state plus the embedding of its
+    target position, while the main model's output projection is shared.
+    """
 
     def __init__(self, config: ModelConfig, main_model: HyMo) -> None:
         super().__init__()
@@ -69,7 +73,7 @@ class MultiTokenPrediction(nn.Module):
     def _mtp_head(
         self, head_idx: int, hidden: torch.Tensor, emb: torch.Tensor
     ) -> tuple[torch.Tensor, torch.Tensor]:
-        """Runs a single MTP prediction head, returning (logits, new_hidden)."""
+        """Run one auxiliary projection and return its logits and next hidden state."""
         block = cast(MTPBlock, self.mtp_modules[head_idx])
         fused = hidden + emb
         h = F.silu(block.w1(fused)) * block.w3(fused)
@@ -81,7 +85,11 @@ class MultiTokenPrediction(nn.Module):
     def forward(
         self, tokens: torch.Tensor, start_pos: int = 0
     ) -> tuple[torch.Tensor, list[MTPOutput]]:
-        """MTP forward pass returning main logits and MTP outputs (targets/logits per depth)."""
+        """Produce main logits and aligned auxiliary targets for each usable depth.
+
+        The sequence shortens by one position per head so every auxiliary logit
+        has a target exactly one or more tokens ahead in the original sequence.
+        """
         B, T = tokens.shape
         main = cast(Any, self._main_model)
         main_logits, main_hidden = main.forward_with_hidden(

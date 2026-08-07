@@ -18,7 +18,9 @@
 
 ## Documentation
 
-The full corpus lives under [`docs/`](docs/README.md) — reading orders, the model walkthrough, mechanism deep-dives, the design doc, config/API references, and the training pipeline. Quick links:
+The documentation is organized by how readers use the repository: concepts explain
+why the architecture works, references describe stable APIs and config fields, and
+guides show operational workflows. The full corpus lives under [`docs/`](docs/README.md). Quick links:
 
 - [`docs/guides/quickstart.md`](docs/guides/quickstart.md) — install, first forward pass, tests and gates
 - [`docs/concepts/model-architecture.md`](docs/concepts/model-architecture.md) — the code walkthrough
@@ -93,7 +95,8 @@ config = load_config("configs/hymo_750m.yaml")
 model = build_hymo(config)
 
 x = torch.randint(0, config.model.vocab_size, (2, 128))
-logits = model(x)  # HyMo.forward returns next-token logits only
+# The main model interface returns one vocabulary distribution per input position.
+    logits = model(x)
 print(logits.shape)  # (2, 128, 64256)
 ```
 
@@ -145,6 +148,9 @@ hymo/
 ---
 
 ## Project Status
+
+The model and training infrastructure are implemented; the remaining milestone is
+running the planned production pre-training job. Current phase status:
 
 | Phase | Status | Description |
 |---|---|---|

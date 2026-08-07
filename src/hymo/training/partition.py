@@ -12,7 +12,11 @@ __all__ = [
 
 
 def goes_to_adamw(name: str, param: nn.Parameter) -> bool:
-    """Return True if parameter should use AdamW optimizer; False if NorMuon."""
+    """Classify a parameter for AdamW; dense 2-D leftovers go to NorMuon.
+
+    Embeddings, gates, expert weights, norms, and learned scalar controls stay
+    on AdamW because their geometry is not suited to matrix orthogonalization.
+    """
     if param.ndim < 2:
         return True
     if param.ndim > 2:
@@ -42,7 +46,7 @@ def goes_to_adamw(name: str, param: nn.Parameter) -> bool:
 
 
 class ParameterPartition:
-    """The partitioned model parameter grouping lists."""
+    """Disjoint parameter lists consumed by the two optimizer implementations."""
 
     __slots__ = ("adamw", "nor_muon")
 
@@ -61,7 +65,7 @@ class ParameterPartition:
 
 
 def partition_parameters(model: nn.Module) -> ParameterPartition:
-    """Partition model parameters into AdamW and NorMuon optimizer lists."""
+    """Deduplicate tied parameters and assign each parameter to one optimizer."""
     p = ParameterPartition()
     seen: set[int] = set()
     for name, param in model.named_parameters():

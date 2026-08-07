@@ -1,6 +1,7 @@
-"""Build the real held-out validation set (architecture doc §6.3).
+"""Stream a deterministic FineWeb-Edu slice into a validation-token binary.
 
-Produces a flat binary shard from a held-out split of FineWeb-Edu.
+The command deliberately writes a flat ``uint32`` file so evaluation can sample
+batches without loading the dataset library or the full corpus at runtime.
 """
 
 from __future__ import annotations
@@ -36,7 +37,11 @@ def build_val_set(
     tokenizer_path: str | Path = "data/tokens/byte_bpe_vocab.json",
     output_path: str | Path = "data/tokens/val.bin",
 ) -> None:
-    """Build the held-out validation set by tokenizing FineWeb-Edu to a flat binary file."""
+    """Tokenize one deterministic dataset shard until the target is reached.
+
+    The output is truncated to exactly ``target_tokens`` when enough source text
+    is available; parent directories are created automatically.
+    """
     from datasets import load_dataset
 
     tok = ExtendedTokenizer(tokenizer_path)

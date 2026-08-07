@@ -39,18 +39,27 @@ from hymo.training import Trainer  # noqa: E402
 
 
 def _ok(msg: str) -> None:
+    """Print a successful gate result immediately for CI and operators."""
     print(f"  [OK]   {msg}", flush=True)
 
 
 def _fail(msg: str) -> None:
+    """Print a failure without hiding the underlying diagnostic."""
     print(f"  [FAIL] {msg}", flush=True)
 
 
 def _section(title: str) -> None:
+    """Separate smoke-gate phases so long GPU logs remain scannable."""
     print(f"\n=== {title} ===", flush=True)
 
 
 def smoke(config_path: Path, micro_batch: int, seq_len: int) -> int:
+    """Exercise production construction and one complete CUDA update path.
+
+    This is intentionally a fail-fast pre-flight check, not a benchmark: it
+    validates the same model, kernels, optimizer, and checkpoint boundaries that
+    a real launch depends on.
+    """
     print(f"HyMo A100 smoke gate")
     print(f"  config:     {config_path}")
     print(f"  device:     {torch.cuda.get_device_name(0)}")
@@ -180,6 +189,7 @@ def smoke(config_path: Path, micro_batch: int, seq_len: int) -> int:
 
 
 def main() -> int:
+    """Parse smoke-gate options and return a shell-friendly exit status."""
     parser = argparse.ArgumentParser(description="HyMo A100 pre-flight gate")
     parser.add_argument(
         "--config",

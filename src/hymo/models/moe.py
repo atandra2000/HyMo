@@ -18,7 +18,7 @@ __all__ = ["SwiGLUExpert", "DeepSeekMoE"]
 
 
 class SwiGLUExpert(nn.Module):
-    """A single SwiGLU expert with projections w1 (gate), w2 (down), and w3 (up)."""
+    """One feed-forward expert using the gated SwiGLU projection pattern."""
 
     def __init__(self, dim: int, inter_dim: int) -> None:
         super().__init__()
@@ -36,7 +36,11 @@ class SwiGLUExpert(nn.Module):
 
 
 class DeepSeekMoE(nn.Module):
-    """DeepSeek-style Mixture-of-Experts (MoE) with aux-loss-free routing (design §2.5)."""
+    """DeepSeek-style routed MoE with a shared expert and EMA load balancing.
+
+    Top-k routing is capacity-limited per expert; the shared branch gives every
+    token a dense path while the routed branches provide sparse specialization.
+    """
 
     def __init__(self, config: ModelConfig, layer_idx: int = 0) -> None:
         super().__init__()
@@ -74,7 +78,7 @@ class DeepSeekMoE(nn.Module):
         )
 
     def gate_forward(self, x: torch.Tensor) -> torch.Tensor:
-        """Compute gate logits in FP32 to avoid sigmoid underflow/overflow under BF16."""
+        """Compute routing logits in FP32, then return them in the input dtype."""
         x_fp32 = x.float()
         w_fp32 = self.gate.weight.float()
         b_fp32 = self.gate.bias.float()
@@ -82,7 +86,11 @@ class DeepSeekMoE(nn.Module):
         return logits.to(x.dtype)
 
     def update_gate_bias(self, speed: float = 0.001) -> None:
-        """EMA bias updates to dynamically balance expert load (penalize overload, reward underload)."""
+        """Adjust gate biases from the previous batch's EMA expert counts.
+
+        Overloaded experts are made less likely and underused experts more likely;
+        no auxiliary routing loss is added to the model objective.
+        """
         if getattr(self, "_last_indices", None) is None:
             return
         counts = torch.bincount(
@@ -100,7 +108,11 @@ class DeepSeekMoE(nn.Module):
             self.gate.bias.copy_(new_bias)
 
     def forward(self, x: torch.Tensor) -> torch.Tensor:
-        """Forward pass dispatching tokens to top-k routed experts and adding the shared expert."""
+        """Route each token to up to ``k`` experts, then add the dense shared path.
+
+        Tokens beyond an expert's capacity are dropped from that routed branch,
+        while the shared expert still contributes an output for every token.
+        """
         B, T, D = x.shape
         logits = self.gate_forward(x)
         probs = F.softmax(logits.float(), dim=-1)

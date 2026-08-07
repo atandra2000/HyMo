@@ -18,7 +18,11 @@ __all__ = ["HyMo", "build_hymo"]
 
 
 class HyMo(nn.Module):
-    """The 32-layer 3:1 GDN:MLA hybrid model (architecture doc §2)."""
+    """Hybrid language model with interleaved GDN and MLA blocks.
+
+    The embedding and output head may share weights, and optional MTP heads reuse
+    the final hidden representation without changing the main logits interface.
+    """
 
     def __init__(self, config: ModelConfig) -> None:
         super().__init__()
@@ -66,7 +70,7 @@ class HyMo(nn.Module):
         )
 
     def _run_layers(self, x: torch.Tensor) -> torch.Tensor:
-        """Run the 32-layer stack."""
+        """Apply the configured block schedule in stack order."""
         for layer in self.layers:
             x = layer(x)
         return x
@@ -80,7 +84,11 @@ class HyMo(nn.Module):
     def forward_with_hidden(
         self, tokens: torch.Tensor, start_pos: int = 0
     ) -> tuple[torch.Tensor, torch.Tensor]:
-        """Forward pass returning both the logits and final pre-head hidden states (for MTP)."""
+        """Return softcapped logits plus the normalized hidden states used by MTP.
+
+        ``start_pos`` is accepted for incremental-decoding API compatibility;
+        the current training path processes complete sequences at once.
+        """
         x = self.embed(tokens)
         x = self._run_layers(x)
         hidden = self.norm(x)
@@ -88,7 +96,10 @@ class HyMo(nn.Module):
         return self.softcap(logits), hidden
 
     def softcap(self, logits: torch.Tensor) -> torch.Tensor:
-        """Apply logit softcapping (PaLM-style) using tanh scaling."""
+        """Bound logits smoothly with PaLM-style tanh softcapping.
+
+        A non-positive configured cap intentionally leaves logits unchanged.
+        """
         if self.logit_softcap <= 0:
             return logits
         return self.logit_softcap * torch.tanh(logits / self.logit_softcap)

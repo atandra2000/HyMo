@@ -26,7 +26,7 @@ _METADATA_FILE = "hymo_meta.json"
 
 @dataclass
 class CheckpointState:
-    """Carried metadata state for checkpoints."""
+    """Small non-tensor state needed to resume a training run exactly."""
 
     step: int = 0
     token_count: int = 0
@@ -36,7 +36,7 @@ class CheckpointState:
 
 
 def _capture_rng_state() -> dict[str, Any]:
-    """Capture current Python, NumPy, and PyTorch RNG states."""
+    """Capture all supported RNG streams for deterministic resumption."""
     py_state = random.getstate()
     return {
         "python": {"version": py_state[0], "internalstate": list(py_state[1]), "gauss": py_state[2]},
@@ -80,7 +80,7 @@ def _restore_rng_state(rng_state: dict[str, Any]) -> None:
 
 
 def _optimizer_state_dict(optimizers: Optimizers) -> dict[str, Any]:
-    """Extract states of the dual optimizers."""
+    """Package optimizer states and current learning rates for DCP."""
     nm_sd = optimizers.nor_muon.state_dict() if optimizers.nor_muon else None
     aw_sd = optimizers.adamw.state_dict()
     return {
@@ -109,7 +109,11 @@ def save_checkpoint(
     scheduler: JointWSDScheduler,
     state: CheckpointState,
 ) -> None:
-    """Save a DCP checkpoint directory with tensors + a JSON metadata sidecar."""
+    """Save model and training state under the configured output directory.
+
+    Metadata is written through a temporary file so an interrupted JSON write
+    does not replace a previously complete sidecar.
+    """
     import torch.distributed.checkpoint as dcp
 
     ckpt_dir = Path(path)
@@ -143,7 +147,7 @@ def load_checkpoint(
     optimizers: Optimizers,
     scheduler: JointWSDScheduler,
 ) -> CheckpointState:
-    """Load a DCP checkpoint directory and restore tensors + JSON metadata."""
+    """Restore model, optimizer, scheduler, RNG, and scalar metadata from DCP."""
     import torch.distributed.checkpoint as dcp
 
     ckpt_dir = Path(path)

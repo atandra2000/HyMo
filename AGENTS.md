@@ -1,7 +1,21 @@
 # HyMo — AGENTS.md
 
-Project-scoped rules. Wins over the root `CoreProjects/AGENTS.md` for this
-project.
+Project-scoped rules. Precedence: the parent `CoreProjects/AGENTS.md`
+and the workspace `LLM/AGENTS.md` apply globally; this file adds
+HyMo-specific rules and wins on HyMo-specific conflicts.
+
+## Quick checks (run before claiming work is done)
+
+```bash
+cd LLM/HyMo
+uv run pytest tests/ -v        # ~1 min CPU; heavy tests auto-skip
+uv run mypy src/hymo           # type gate
+uv run ruff check src/hymo     # lint gate
+```
+
+Data comes from the workspace `LLM/shared_data/` pipeline (see
+`LLM/AGENTS.md` §Shared data pipeline rules); HyMo's shim is
+`data/prepare_data.py` with the custom BPE-64k + 256-byte tokenizer.
 
 ## Engineering rules (HyMo-specific)
 

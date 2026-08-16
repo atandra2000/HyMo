@@ -96,7 +96,7 @@ model = build_hymo(config)
 
 x = torch.randint(0, config.model.vocab_size, (2, 128))
 # The main model interface returns one vocabulary distribution per input position.
-    logits = model(x)
+logits = model(x)
 print(logits.shape)  # (2, 128, 64256)
 ```
 

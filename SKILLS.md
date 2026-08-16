@@ -100,4 +100,4 @@ run.
    bad step and roll back to the prior DCP checkpoint.
 
 Cross-reference: `.agents/skills/llm-architecture/SKILL.md` (GDN, MLA, MoE, MTP)
-and `DeepSeek-v3-Lite/MLA.md` for MLA absorption details reused in HyMo.
+and `DeepSeek-v3-Lite/docs/concepts/attention-and-precision.md` for MLA absorption details reused in HyMo.

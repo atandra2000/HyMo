@@ -29,7 +29,7 @@ uv sync --all-extras
 
 ## 2. Basic Workflows
 
-### 2.1 First forward pass (~750M active / 1.86B total)
+### 2.1 First forward pass (~434M active / 1.13B total)
 
 This example loads the production configuration. On a laptop, use the tiny
 configuration in section 2.2 instead of allocating the full model.
@@ -38,7 +38,7 @@ configuration in section 2.2 instead of allocating the full model.
 import torch
 from hymo import load_config, build_hymo
 
-# 1. Load the production 750M config
+# 1. Load the production 434M config
 config = load_config("configs/hymo_750m.yaml")
 
 # 2. Instantiate the 32-layer hybrid stack
@@ -55,7 +55,7 @@ print(f"Logits shape: {logits.shape}")  # (2, 128, 64256)
 
 ### 2.2 CPU-friendly testing config (~760K params)
 
-For local development or unit testing on laptop hardware without allocating the full 1.86B parameter graph:
+For local development or unit testing on laptop hardware without allocating the full 1.13B parameter graph:
 
 ```python
 from hymo.core.config import ModelConfig, HyMoConfig, TrainingConfig, OptimizerConfig, SchedulerConfig
@@ -170,10 +170,10 @@ print(f"Validation Perplexity: {val_metrics.ppl:.2f}")
 ## 3. Tests and Quality Gates
 
 ```bash
-# Default test suite (~1.8s on CPU; heavy 1.86B model tests auto-skipped)
+# Default test suite (~1.8s on CPU; heavy 1.13B model tests auto-skipped)
 pytest tests/ -v
 
-# Include full 1.86B model construction and heavy memory allocation tests
+# Include full 1.13B model construction and heavy memory allocation tests
 pytest tests/ --run-heavy
 
 # Validate doc-code symbol anchors and intra-repo markdown links

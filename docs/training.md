@@ -1,6 +1,6 @@
 # HyMo — Training
 
-> The training pipeline end to end: data (tokenizer, validation set, 40× params-in-tokens mixture), the trainer loop (dual optimizer, WSD scheduler, FSDP-2, MTP wiring, EMA gate-bias, NaN-skip), checkpointing (DCP), and in-training validation. The eval/ablation scope note below records what was removed in the 2026-08-04 cleanup.
+> The training pipeline end to end: data (tokenizer, validation set, ~69× params-in-tokens mixture), the trainer loop (dual optimizer, WSD scheduler, FSDP-2, MTP wiring, EMA gate-bias, NaN-skip), checkpointing (DCP), and in-training validation. The eval/ablation scope note below records what was removed in the 2026-08-04 cleanup.
 
 ## Evaluation scope note (2026-08-04 cleanup)
 
@@ -305,7 +305,7 @@ The 30 B-token run takes ~600 shards at 50 M each. With 4 A100 ranks and `num_wo
 - Walkthrough: `training.md` (trainer
   consumes the `DataLoader`), `concepts/model-architecture.md` §2 (model config), `training.md` §6.1 (the validation binary is read by `compute_validation_loss`).
 - Concepts: `concepts/../training.md` (BPE / byte
-  fallback derivation, 40× params-in-tokens rule).
+  fallback derivation, ~69× params-in-tokens rule).
 - Tests: `tests/unit/test_data.py` (tokenizer round-trip, shard
   round-trip, dataset slicing).
 - Config: `src/hymo/data/data_config.py` (`SourceSpec`,
@@ -1036,7 +1036,7 @@ The reverse:
 
 ### 7.5 Why DCP not `torch.save`?
 
-DCP shards the state dict across ranks during write and reassembles during read. For a 1.86 B-param model on 4 ranks, each rank writes ~465 MB of BF16 parameters instead of one rank writing 1.86 GB. That makes checkpoint I/O bandwidth-comparable to the per-rank HBM bandwidth.
+DCP shards the state dict across ranks during write and reassembles during read. For a 1.13 B-param model on 4 ranks, each rank writes ~283 MB of BF16 parameters instead of one rank writing 1.13 GB. That makes checkpoint I/O bandwidth-comparable to the per-rank HBM bandwidth.
 
 ---
 
@@ -1174,7 +1174,7 @@ After this file, you can:
 
 1. State BPE tokenization and why it's the modern default.
 2. Explain byte-level fallback and the 64,256 vocab choice.
-3. State the 40× params-in-tokens rule and its provenance.
+3. State the ~69× params-in-tokens rule and its provenance.
 4. Defend HyMo's data mixture (10 sources, 30 B tokens at
    750 M active).
 
@@ -1228,7 +1228,7 @@ With `vocab_size = 64_256` and `max_seq_len = 4_096`, the "characters per contex
 
 The standard Chinchilla rule (Hoffmann et al. 2022) was **20 tokens per parameter** at training compute optimum. Modern frontier practice (Llama-3, DeepSeek-V3) uses **40 tokens per parameter** — over-training, on the assumption that more tokens = better quality, even at the expense of compute.
 
-For HyMo at 750 M active params:
+For HyMo at 434M active params:
 
 - 20× Chinchilla: `15 B tokens`
 - 40× over-training: `30 B tokens`
@@ -1311,7 +1311,7 @@ Per-token wall-clock: 340 MFLOPs / 330 TFLOPs/s = ~1 µs. With FSDP + Triton + t
 
 **Q2. Why 30 B tokens and not 15 B or 60 B?**
 
-> A: 30 B is 40× params-in-tokens at 750 M active — the over-training budget used by Llama-3 and DeepSeek-V3. 15 B (20×) would be Chinchilla-optimal; 60 B would be 80×, which over-trains at the cost of compute. 40× is the empirical sweet spot.
+> A: 30 B is ~69× params-in-tokens at 434M active — the over-training budget used by Llama-3 and DeepSeek-V3. 15 B (20×) would be Chinchilla-optimal; 60 B would be 80×, which over-trains at the cost of compute. 40× is the empirical sweet spot.
 
 **Q3. Why is the FineWeb-Edu quality threshold 3?**
 

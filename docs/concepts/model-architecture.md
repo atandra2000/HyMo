@@ -182,13 +182,12 @@ MLA (with MoE):
 
 MLA's attention is **stateless** — routing errors are local to one position and corrected at the next layer.
 
-#### 1.3.3 The Dense FFN on GDN
+#### 1.3.3 No FFN on GDN
 
-GDN blocks use **dense SwiGLU** (every token through every FFN parameter):
-- No routing overhead
-- No capacity capping
-- Full parameter utilization
-- Simpler training dynamics
+GDN blocks are **recurrence-only** — the gated delta rule output goes straight through `out_proj` to the residual stream. There is no SwiGLU FFN after the recurrence:
+- No extra dense parameters on the 24 GDN layers
+- Every GDN parameter contributes to the recurrence (in_proj, conv1d, b/c/dt/g_proj, out_proj, skip_proj)
+- Compute is spent only on the recurrence itself
 
 ---
 
@@ -219,9 +218,9 @@ GDN blocks use **dense SwiGLU** (every token through every FFN parameter):
 │ MTP depth:           2 (predict tokens t+2, t+3)             │
 │ MTP weights:         [0.3, 0.1]                              │
 │                                                              │
-│ Active params:       ~750M                                   │
-│ Stored params:       ~1.86B (MoE experts are stored)         │
-│ Training tokens:     30B (40× params-in-tokens)              │
+│ Active params:       ~434M                                   │
+│ Stored params:       ~1.13B (MoE experts are stored)         │
+│ Training tokens:     30B (~69× params-in-tokens)              │
 │ Context length:      4,096                                   │
 └─────────────────────────────────────────────────────────────┘
 ```
@@ -2343,11 +2342,11 @@ MoE(x) = Σ_i routing(x, i) · Expert_i(x)    # Different experts for different 
 
 Dense FFN has fixed capacity: every token uses every parameter. MoE has **adaptive capacity**: tokens are routed to the experts that are most relevant.
 
-**At 750M active / 1.86B stored:**
+**At 434M active / 1.13B stored:**
 - Dense FFN: 750M params × every token = 750M effective
-- MoE FFN: 1.86B params × (2/16) per token = 232M active + shared
+- MoE FFN: 1.13B params × (2/16) per token = 141M active + shared
 
-The 1.86B stored params give the model **2.5× more total capacity** while only using 232M active params per token.
+The 1.13B stored params give the model **2.6× more total capacity** while only using 148.6M active MoE params per token.
 
 ---
 
@@ -2962,11 +2961,11 @@ Step 0:  embed(tokens)
          Output: (2, 128, 896) — float32 embeddings
 
 Step 1:  MLABlock(0)  — layer 0 (MLA attention + MoE)
-Step 2:  GatedDeltaNetBlock(1)  — layer 1 (GDN + dense FFN)
-Step 3:  GatedDeltaNetBlock(2)  — layer 2 (GDN + dense FFN)
-Step 4:  GatedDeltaNetBlock(3)  — layer 3 (GDN + dense FFN)
+Step 2:  GatedDeltaNetBlock(1)  — layer 1 (GDN, recurrence-only)
+Step 3:  GatedDeltaNetBlock(2)  — layer 2 (GDN, recurrence-only)
+Step 4:  GatedDeltaNetBlock(3)  — layer 3 (GDN, recurrence-only)
 Step 5:  MLABlock(4)  — layer 4 (MLA attention + MoE)
-Step 6-8: GatedDeltaNetBlock(5-7) — layers 5-7 (GDN + dense FFN)
+Step 6-8: GatedDeltaNetBlock(5-7) — layers 5-7 (GDN, recurrence-only)
 Step 9:  MLABlock(8)  — layer 8 (MLA attention + MoE)
 ...
 Step 32: GatedDeltaNetBlock(31) — last GDN layer
@@ -3002,9 +3001,9 @@ logits:  (2, 128, 64256) × 4 bytes = 57.6 MB (activation)
 #### 11.5.2 Total Memory for B=2, T=128
 
 ```
-Model weights:  ~1.86B params × 4 bytes = 7.44 GB
+Model weights:  ~1.13B params × 4 bytes = 4.51 GB
 Activations:    ~67 MB peak
-Optimizer:      ~1.86B × 8 bytes = 14.88 GB (Adam states)
+Optimizer:      ~1.13B × 8 bytes = 9.04 GB (Adam states)
 Total:          ~22.4 GB
 ```
 
@@ -3014,28 +3013,27 @@ Total:          ~22.4 GB
 
 #### 11.6.1 FLOPs per Token
 
-| Component | FLOPs per token | Percentage |
-|-----------|-----------------|------------|
-| Embedding | 0.9M | 0.1% |
-| MLA attention (8 layers) | 96M | 12.8% |
-| MoE (8 layers, 2 experts) | 132M | 17.6% |
-| GDN (24 layers) | 120M | 16.0% |
-| Dense FFN (24 layers) | 168M | 22.4% |
-| Output head | 1.8M | 0.2% |
-| **Total** | **~750M** | — |
+| Component | FLOPs per token (4K ctx) | Percentage |
+|-----------|--------------------------|------------|
+| Embedding/output head (logits) | 115M | 0.03% |
+| MLA attention (QK·V at T=4096) | 412G | 99.83% |
+| MLA projections (q/k/v/o) | 50M | 0.01% |
+| MoE (8 layers, 2 routed + 1 shared) | 99M | 0.02% |
+| GDN linear projections (in/g/out/skip) | 227M | 0.06% |
+| MTP heads | 12M | <0.01% |
+| **Total** | **~413G** | — |
 
-**The 750M active parameter claim is verified:** Each token uses ~750M FLOPs, which matches the parameter count.
+**Attention dominates at 4K context** (MLA's T²·d·H cost). At shorter contexts the linear components matter more, but for the primary 4K-ctx training target, attention is the bottleneck.
 
 #### 11.6.2 Training Throughput
 
-At 750M FLOPs/token and assuming 50% MFU:
+At ~413G FLOPs/token forward (~826G fwd+bwd) at 4K ctx and 50% MFU:
 ```
-Throughput = MFU × (FLOPs available) / (FLOPs per token)
-           = 0.50 × (312 TFLOPS on H100) / 750M
-           = 208K tokens/second
+Throughput = 0.50 × (312 TFLOPS on H100) / 413G
+           ≈ 378 tokens/second per H100
 ```
 
-This matches the expected throughput for a 750M model on H100.
+At 4 ranks this is ~1,500 tok/s aggregate; for the 30B-token run that's ~5.7 days of pure compute (matches the design target).
 
 ---
 
@@ -3098,7 +3096,7 @@ class HyMo(nn.Module):
 
 ## 12. Parameter Count Breakdown — Active vs Stored
 
-> **HyMo has 1.86B stored parameters but only 750M active parameters per token.** This distinction comes from MoE routing — only 2 of 16 routed experts are active per token. Understanding this distinction is critical for reasoning about compute, memory, and training efficiency.
+> **HyMo has 1.13B stored parameters but only 434M active parameters per token.** This distinction comes from MoE routing — only 2 of 16 routed experts are active per token. Understanding this distinction is critical for reasoning about compute, memory, and training efficiency.
 
 ---
 
@@ -3108,7 +3106,7 @@ class HyMo(nn.Module):
 
 Stored parameters are all weights in memory — every expert, every projection, every embedding:
 ```
-Stored = 1.86B params × 4 bytes = 7.44 GB (BF16)
+Stored = 1.13B params × 4 bytes = 4.51 GB (BF16)
 ```
 
 This is what you need for model parallelism and memory planning.
@@ -3117,7 +3115,7 @@ This is what you need for model parallelism and memory planning.
 
 Active parameters are those actually used for a single token:
 ```
-Active = 750M params × 4 bytes = 3.0 GB (BF16)
+Active = 434M params × 4 bytes = 1.74 GB (BF16)
 ```
 
 This is what determines FLOPs and throughput.
@@ -3125,7 +3123,7 @@ This is what determines FLOPs and throughput.
 #### 12.1.3 The Efficiency Ratio
 
 ```
-Efficiency = Active / Stored = 750M / 1.86B ≈ 40%
+Efficiency = Active / Stored = 434M / 1.13B ≈ 40%
 ```
 
 HyMo uses 40% of its parameters per token. The remaining 60% are dormant experts that contribute zero computation.
@@ -3156,22 +3154,28 @@ This saves 57.6M parameters and improves quality (embedding and output spaces ar
 
 #### 12.2.2 GDN Blocks (24 layers)
 
-Each GDN block has 2.5M active params:
+Each GDN block has ~8.07M active params:
 ```
-in_proj:    896 × 1280 = 1.15M (gate + hidden projections)
-b_proj:     1280 × 40 × 32 = 1.64M (write keys)
-c_proj:     1280 × 40 × 32 = 1.64M (read keys)
-dt_proj:    1280 × 40 = 51.2K (delta time)
-D:          40 × 32 = 1.28K (skip connection)
-out_proj:   896 × 896 = 802.8K (output projection)
+in_proj:    896 × 1280  = 1.147M (input projection to gdn_d_inner)
+conv1d:     1280 × 4    = 5.1K    (depthwise conv kernel)
+b_proj:     1280 × 40 × 32 = 1.638M (write keys: gdn_n_heads × d_state)
+c_proj:     1280 × 40 × 32 = 1.638M (read keys)
+dt_proj:    1280 × 40   = 51.2K   (delta-time gate)
+g_proj:     1280 × 1280 = 1.638M  (hidden gate)
+out_proj:   1280 × 896  = 1.147M  (output projection back to dim)
+skip_proj:  896 × 896   = 802.8K  (skip connection)
+A_log:      40 × 32     = 1.28K   (learnable decay log)
+D:          40          = 40      (per-head scalar skip)
+dt_bias:    40          = 40      (per-head dt bias)
 ```
 
-**Total per GDN block:** ~5.28M params **Total for 24 GDN blocks:** 24 × 5.28M = 126.7M params
+**Total per GDN block:** ~8.07M params **Total for 24 GDN blocks:** 24 × 8.07M = 193.7M params
 
 **Why GDN is efficient:**
 - No attention matrices (no Q, K, V projections for full attention)
-- Recurrent state is small (40 × 32 × 32 = 40K params per layer)
-- Triton kernel fuses all operations
+- No FFN/SwiGLU — every GDN parameter is on the recurrence path
+- Recurrent state is small ([40, 32, 32] bf16 = 80KB per layer)
+- Triton kernel fuses all linear projections with the recurrence
 
 ---
 
@@ -3231,18 +3235,18 @@ MTP Head 2: 896 × 2304 × 3 = 6.19M (SwiGLU)
 
 | Component | Active Params | Stored Params | Percentage (Active) |
 |-----------|---------------|---------------|---------------------|
-| Embedding | 57.6M | 57.6M | 7.7% |
-| GDN (24 layers) | 126.7M | 126.7M | 16.9% |
-| MLA (8 layers) | 9.84M | 9.84M | 1.3% |
-| MoE (8 layers) | 148.6M | 841.6M | 19.8% |
-| Dense FFN (24 layers) | 168.0M | 168.0M | 22.4% |
-| MTP | 12.38M | 12.38M | 1.6% |
-| **Total** | **~750M** | **~1.86B** | — |
+| Embedding (tied with head) | 57.6M | 57.6M | 13.3% |
+| GDN (24 layers, no FFN) | 193.7M | 193.7M | 44.6% |
+| MLA attention (8 layers, no FFN) | 22.2M | 22.2M | 5.1% |
+| MoE routed experts (8 layers, top-2) | 99.1M | 792.7M | 22.8% |
+| MoE shared expert (8 layers) | 49.5M | 49.5M | 11.4% |
+| MTP heads (depth 2) | 12.4M | 12.4M | 2.9% |
+| **Total** | **~434M** | **~1.13B** | — |
 
 **Key observations:**
-1. MoE is the only component where active ≠ stored (19.8% active, 45.2% stored)
-2. Dense FFN is the largest active component (22.4%)
-3. MLA attention is surprisingly small (1.3%) thanks to MQA-4 and low-rank compression
+1. MoE is the only component where active ≠ stored (22.8% active of total, ~70% stored = 8:1 stored/active ratio)
+2. GDN is the largest active block (44.6%) because every GDN parameter contributes to recurrence (no FFN to spread the budget)
+3. MLA attention without MoE is small (~5.1%) thanks to MQA-4 and low-rank KV compression
 
 ---
 
@@ -3250,22 +3254,22 @@ MTP Head 2: 896 × 2304 × 3 = 6.19M (SwiGLU)
 
 #### 12.4.1 Compute Efficiency
 
-At 750M active params and 1.86B stored:
+At 434M active params and 1.13B stored:
 ```
-FLOPs per token = 2 × 750M = 1.5 GFLOPs (forward only)
-Memory required = 1.86B × 4 bytes = 7.44 GB
+FLOPs per token = 2 × 434M = 0.87 GFLOPs (forward only)
+Memory required = 1.13B × 4 bytes = 4.51 GB
 ```
 
 The model is **compute-bound** (not memory-bound) because:
-- Active params (750M) are much smaller than stored params (1.86B)
+- Active params (434M) are much smaller than stored params (1.13B)
 - Each token uses 1.5 GFLOPs, which is manageable on modern GPUs
-- The memory footprint (7.44 GB) fits in HBM
+- The memory footprint (4.51 GB) fits in HBM
 
 #### 12.4.2 Scaling Implications
 
-To scale HyMo to 3B active params:
+To scale HyMo to 1.5B active params:
 ```
-Stored params = 3B × (1.86B / 750M) = 7.44B
+Stored params = 3B × (1.13B / 434M) = 7.44B
 Memory = 7.44B × 4 bytes = 29.8 GB
 ```
 
@@ -3503,7 +3507,7 @@ The shared latent saves ~`4×` on KV cache size: from `(4096 * 16 * 256 * 2)` (M
 
 **Q2. Why didn't HyMo go full MLA?**
 
-> A: Two reasons. First, at 750 M active params the absorbed-MLA kernel (which needs extra matmuls to project through the low-rank bottleneck at attention time) is not a clear win on quality-per-FLOPs vs. MQA-4. Second, the absorbed-MLA kernel is harder to write in pure PyTorch + Triton than the MQA-4 kernel; HyMo's kernel budget didn't include it. The `kv_lora_rank = 128` field is set up so a future v1.2 could flip to full MLA absorption without changing the config shape.
+> A: Two reasons. First, at 434M active params the absorbed-MLA kernel (which needs extra matmuls to project through the low-rank bottleneck at attention time) is not a clear win on quality-per-FLOPs vs. MQA-4. Second, the absorbed-MLA kernel is harder to write in pure PyTorch + Triton than the MQA-4 kernel; HyMo's kernel budget didn't include it. The `kv_lora_rank = 128` field is set up so a future v1.2 could flip to full MLA absorption without changing the config shape.
 
 **Q3. Why is the partial RoPE only on the first 25% of `head_dim`?**
 

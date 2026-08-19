@@ -1,7 +1,7 @@
 # SKILLS.md — HyMo
 
 > Companion to `AGENTS.md`. Day-to-day workflows for the flagship 3:1 GDN/MLA
-> hybrid. Anchor metric: **750M active / 1.86B stored params**.
+> hybrid. Anchor metric: **~434M active / ~1.13B stored params**.
 
 ---
 
@@ -10,7 +10,7 @@
 ```bash
 cd LLM/HyMo
 uv run pytest tests/ -v              # ~1 min CPU; heavy tests skipped
-uv run pytest tests/ --run-heavy -v    # full 1.86B model construction (GPU pod)
+uv run pytest tests/ --run-heavy -v    # full 1.13B model construction (GPU pod)
 uv run mypy src/hymo
 uv run ruff check src/hymo
 ```

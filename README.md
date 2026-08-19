@@ -2,7 +2,7 @@
 
 # HyMo
 
-**A 750M-active / 1.86B-stored hybrid language model** — Gated Delta Networks (linear attention) × Multi-Head Latent Attention (full attention) with Asymmetric Mixture-of-Experts. Pre-trained from scratch on 30B tokens, targeting held-out FineWeb-Edu perplexity ≤ 2.10.
+**A 434M-active / 1.13B-stored hybrid language model** — Gated Delta Networks (linear attention) × Multi-Head Latent Attention (full attention) with Asymmetric Mixture-of-Experts. Pre-trained from scratch on 30B tokens, targeting held-out FineWeb-Edu perplexity ≤ 2.10.
 
 *The flagship model of the CoreProjects portfolio.*
 
@@ -35,7 +35,7 @@ Transformer attention scales quadratically with sequence length — the dominant
 The headline design choices:
 
 - **3:1 GDN-to-MLA ratio** — 24 linear-attention layers interleaved with 8 full-attention layers, so 75% of the stack is sub-quadratic.
-- **Asymmetric feed-forward** — MoE (sparse, expensive) lives only on the 8 full-attention MLA blocks; the 24 linear GDN blocks use cheap dense SwiGLU. Compute is spent where it buys the most.
+- **Asymmetric feed-forward** — MoE (sparse, expensive) lives only on the 8 full-attention MLA blocks; the 24 linear GDN blocks are recurrence-only (no FFN). Compute is spent where it buys the most.
 - **Custom Triton GDN kernel** — a fused 1D selective scan with chunked recurrence (`chunk_size=64`), written by hand in `src/hymo/models/gdn_triton.py` for throughput and numerical parity with the eager reference. There is no `fla`-library dependency — the only sanctioned kernel path is this hand-written Triton kernel.
 
 ---
@@ -46,17 +46,17 @@ HyMo is a 32-layer stack with a **3:1 GDN-to-MLA ratio**.
 
 | Component | Layers | Type | Description |
 |---|---|---|---|
-| **GDN** | 24 | Linear attention | Gated Delta Net with 1D selective scan, partial RoPE, dense SwiGLU FFN |
+| **GDN** | 24 | Linear attention | Gated Delta Net with 1D selective scan, partial RoPE, recurrence-only (no FFN) |
 | **MLA** | 8 | Full attention | Multi-Head Latent Attention (DeepSeek-style low-rank KV compression, 4 KV heads) |
-| **MoE** | On MLA layers | Sparse FFN | DeepSeekMoE (16 routed + 1 shared expert, top-2 routing) |
-| **FFN** | On GDN layers | Dense | SwiGLU, `inter_dim = 2560` |
+| **MoE** | On MLA layers | Sparse FFN | DeepSeekMoE (16 routed + 1 shared expert, top-2 routing, `inter_dim = 2304`) |
+| **FFN** | On MLA layers only | SwiGLU | Inside the MoE experts, `inter_dim = 2304`; GDN blocks have no FFN |
 | **MTP** | 2 heads | Multi-token prediction | Auxiliary heads predicting next 2 tokens, weighted `[0.3, 0.1]` |
 
-**Model footprint (v1.0 config):** `dim = 896`, `n_heads = 16`, `max_seq_len = 4096`, `vocab_size = 64,256` (BPE-64k + 256-byte tokenizer). ~750M active / ~1.86B stored parameters.
+**Model footprint (v1.0 config):** `dim = 896`, `n_heads = 16`, `max_seq_len = 4096`, `vocab_size = 64,256` (BPE-64k + 256-byte tokenizer). ~434M active / ~1.13B stored parameters.
 
 Key architectural invariants:
 
-- **Asymmetric feed-forward** — MoE exclusively on MLA blocks; GDN blocks stay dense SwiGLU.
+- **Asymmetric feed-forward** — MoE exclusively on MLA blocks; GDN blocks are recurrence-only (no FFN).
 - **Partial RoPE** — applied to the first 25% of `head_dim` at every position across all 32 layers.
 - **MQA-4** — MLA compresses to 4 KV groups for efficient inference.
 - **FP32 master weights** — full numerical stability; optimizer state held in float32.
@@ -72,7 +72,7 @@ Key architectural invariants:
 - **FSDP-2 full parameter sharding** — BF16 mixed precision, gradient clipping by global norm, NaN-step skipping with configurable tolerance.
 - **10-source data pipeline** — BPE-64k + 256-byte tokenizer and the held-out FineWeb-Edu validation-set builder remain in-repo; the 10 streaming loaders and shard writer moved to the workspace `LLM/shared_data/` package in the 2026-08-04 cleanup (the trainer consumes a raw `data_iter`).
 - **Ablation framework** — 4 families of config derivation (GDN variants, MLA variants, MoE variants, optimizer variants) via `dataclasses.replace` on the frozen configs; the in-repo `ablations/` package was removed in the 2026-08-04 cleanup — the derivation helper `derive_config` lives in `hymo.core.config`.
-- **Cool-by-design test suite** — the full 1.86B model is never built in default tests; a ~760K-param surrogate is used instead. Heavy tests (full model construction) are opt-in via `--run-heavy`. Default `pytest` finishes in ~1 minute on an M1 Air.
+- **Cool-by-design test suite** — the full 1.13B model is never built in default tests; a ~760K-param surrogate is used instead. Heavy tests (full model construction) are opt-in via `--run-heavy`. Default `pytest` finishes in ~1 minute on an M1 Air.
 - **DCP checkpointing** — distributed checkpoint save/load with resume-from-arbitrary-step support.
 
 ---
@@ -102,7 +102,7 @@ print(logits.shape)  # (2, 128, 64256)
 
 ```bash
 pytest tests/ -v                # ~1 min on CPU; heavy tests skipped (191 passed / 35 skipped as of 2026-08-05)
-pytest tests/ --run-heavy       # includes full 1.86B model construction
+pytest tests/ --run-heavy       # includes full 1.13B model construction
 mypy src/hymo                   # type gate
 ruff check src/hymo             # lint gate
 ```

@@ -406,7 +406,7 @@ The key operations:
 - **Re-shard** after the forward-backward: each rank frees
   the gathered parameters and goes back to its shard.
 
-Memory per rank: `O(model_size / world_size)` — at 4 ranks, each rank holds 1/4 of the model. This is what makes a 1.86 B model fit on 4 × 80 GB A100s.
+Memory per rank: `O(model_size / world_size)` — at 4 ranks, each rank holds 1/4 of the model. This is what makes a 1.13 B model fit on 4 × 80 GB A100s.
 
 ### Math derivation
 
@@ -425,12 +425,12 @@ For a model with `P` parameters, `world_size = W`, and mixed precision (BF16 par
 
 ### Full-shard savings
 
-At `P = 1.86 B`, `W = 4`:
+At `P = 1.13 B`, `W = 4`:
 
-- BF16 params: `1.86e9 / 4 × 2 = 930 MB`
+- BF16 params: `1.13e9 / 4 × 2 = 930 MB`
 - BF16 grads: `930 MB`
-- FP32 master: `1.86e9 / 4 × 4 = 1.86 GB`
-- AdamW state: `1.86e9 / 4 × 8 = 3.72 GB`
+- FP32 master: `1.13e9 / 4 × 4 = 1.13 GB`
+- AdamW state: `1.13e9 / 4 × 8 = 3.72 GB`
 - All-gather activations: ~3.5 GB (variable, depends on
   block size)
 - Total per rank: ~10 GB
@@ -442,7 +442,7 @@ A100 80 GB has 8× headroom.
 Each forward pass triggers `n_blocks` all-gathers; each backward triggers `n_blocks` reduce-scatters. The total communication volume per step is roughly:
 
 ```
-volume = 2 × P × 2 bytes (BF16) = 7.4 GB   (one forward + one backward)
+volume = 2 × P × 2 bytes (BF16) = 4.5 GB   (one forward + one backward)
 ```
 
 Across 4 ranks, this is ~1.85 GB per rank of all-gather traffic. With NVLink at 600 GB/s, this is ~3 ms per step — negligible relative to the ~5 s per step compute.
@@ -478,13 +478,13 @@ The auto-wrap policy `fsdp_auto_wrap_policy` wraps each `GatedDeltaNetBlock` and
 
 Production scale (`world_size = 4`, `fsdp = True`, `fsdp_mixed_precision = "bfloat16"`):
 
-Per-rank memory (`P = 1.86 B`):
+Per-rank memory (`P = 1.13 B`):
 
 | Component | Per rank |
 |---|---|
 | BF16 params (sharded) | 930 MB |
 | BF16 grads (sharded) | 930 MB |
-| FP32 master (sharded) | 1.86 GB |
+| FP32 master (sharded) | 1.13 GB |
 | AdamW state (m, v) | 3.72 GB |
 | All-gather activations (peak) | 3.5 GB |
 | Activations (per micro-batch) | 1.5 GB |
@@ -495,7 +495,7 @@ A100 80 GB has 8× headroom — the dominant bottleneck is **compute time**, not
 Communication:
 
 ```
-Volume per optimizer step (forward + backward) = 2 × P × 2 bytes = 7.4 GB
+Volume per optimizer step (forward + backward) = 2 × P × 2 bytes = 4.5 GB
 Per rank (NVLink × 4) = 1.85 GB ≈ 3 ms
 ```
 
@@ -506,13 +506,13 @@ At 8 s per step (the production target), communication is
 
 **Q1. Why FSDP and not DDP?**
 
-> A: DDP replicates the full model on every rank. At `P = 1.86 B`, each rank holds 1.86 GB of BF16 parameters (plus 7.4 GB of optimizer state) — 9.2 GB just for the model and optimizer, plus activations. A100 80 GB can fit this, but it's tight. FSDP shards the model across ranks, so each rank holds only `P / W` of everything. With `W = 4`, each rank holds 1/4 of the model. Plus, the all-gather
+> A: DDP replicates the full model on every rank. At `P = 1.13 B`, each rank holds 1.13 GB of BF16 parameters (plus 4.5 GB of optimizer state) — 5.7 GB just for the model and optimizer, plus activations. A100 80 GB can fit this, but it's tight. FSDP shards the model across ranks, so each rank holds only `P / W` of everything. With `W = 4`, each rank holds 1/4 of the model. Plus, the all-gather
 > + reduce-scatter is bandwidth-cheap relative to the
 > forward+backward.
 
 **Q2. Why full sharding (ZeRO-3 / FSDP) instead of ZeRO-1 or 2?**
 
-> A: At 1 B+ params, the optimizer state alone is 2× the parameters (FP32 master + AdamW `m` + `v`). For `P = 1.86 B`, that's 2 × 1.86 GB = 3.7 GB per rank just for the optimizer state. ZeRO-1 shaves that by `W`; ZeRO-3 shaves the parameters and gradients too. For 4 ranks, the savings are ~1.8 GB (ZeRO-1) vs ~7.4 GB (ZeRO-3).
+> A: At 434M+ params, the optimizer state alone is 2× the parameters (FP32 master + AdamW `m` + `v`). For `P = 1.13 B`, that's 2 × 1.13 GB = 3.7 GB per rank just for the optimizer state. ZeRO-1 shaves that by `W`; ZeRO-3 shaves the parameters and gradients too. For 4 ranks, the savings are ~1.1 GB (ZeRO-1) vs ~4.5 GB (ZeRO-3).
 
 **Q3. Why auto-wrap at the block level (not the parameter level)?**
 
@@ -520,11 +520,11 @@ At 8 s per step (the production target), communication is
 
 **Q4. Why `world_size = 4` and not 8?**
 
-> A: For the 1.86 B model on 4 × A100 80 GB, 4 ranks is enough to fit the model + activations + optimizer state with ~7× headroom. Doubling to 8 ranks halves the per-rank memory but halves the per-rank compute; the throughput per dollar is roughly the same. HyMo's 4-rank target is the empirical sweet spot for this model size.
+> A: For the 1.13 B model on 4 × A100 80 GB, 4 ranks is enough to fit the model + activations + optimizer state with ~14× headroom. Doubling to 8 ranks halves the per-rank memory but halves the per-rank compute; the throughput per dollar is roughly the same. HyMo's 4-rank target is the empirical sweet spot for this model size.
 
 **Q5. What happens if `torch.distributed.fsdp` is not available?**
 
-> A: `wrap_model_with_fsdp` returns the model unwrapped. This is the case for CPU dev runs and CI. The trainer still works (single-rank, no sharding), but the model uses ~9.2 GB of RAM for parameters + AdamW state. The test suite uses the tiny config (~760 K params) so this isn't a problem.
+> A: `wrap_model_with_fsdp` returns the model unwrapped. This is the case for CPU dev runs and CI. The trainer still works (single-rank, no sharding), but the model uses ~5.7 GB of RAM for parameters + AdamW state. The test suite uses the tiny config (~760 K params) so this isn't a problem.
 
 **Q6. What is `fully_shard` (FSDP-2's new API)?**
 
@@ -640,7 +640,7 @@ PyTorch defaults, plus two deliberate inline choices:
 
 The production target is sustained throughput on 4× A100 80 GB SXM, with `per_step_tokens = 524,288` (see
 [`../references/config.md`(../references/config.md) §2.4). The four
-in-scope optimizations are toggled by flags in `TrainingConfig`; the fifth, **FSDP-2**, is what makes the 1.86 B-param model fit across 4 GPUs at all.
+in-scope optimizations are toggled by flags in `TrainingConfig`; the fifth, **FSDP-2**, is what makes the 1.13 B-param model fit across 4 GPUs at all.
 
 | # | Optimization | Flag (TrainingConfig) | Where it lives | Speedup vs eager |
 |---|---|---|---|---|

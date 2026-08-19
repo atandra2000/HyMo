@@ -385,7 +385,7 @@ Production scale:
 - Per-expert params: `3 × 896 × 2304 = 6.2 M`. With 16 routed + 1
   shared = `17 × 6.2 M = 105 M` MoE params per layer.
 - Across 8 MLA layers: `8 × 105 M = 840 M` MoE params
-  (most of the "stored" 1.86 B).
+  (most of the "stored" 1.13 B).
 - Per-token FLOPs: `2 × 6.2 M = 12.4 M` per layer (top-2
   routing × expert FLOPs) — `8 × 12.4 M = 99 M` total.
 - Per-token "saved" FLOPs vs. dense: `8 × (16-2)/16 × 6.2 M =
@@ -627,7 +627,7 @@ HyMo is in this family. The 3:1 ratio (24 GDN + 8 MLA) is **more attention-heavy
 
 ```
 8 MLA layers  ── full attention, MoE
-24 GDN layers ── linear attention, dense SwiGLU
+24 GDN layers ── linear attention, no FFN (recurrence-only)
 ```
 
 Why 3:1?
@@ -744,7 +744,7 @@ Trade-offs:
 
 **Q7. Why is HyMo's `dim = 896` and not 1024 or 512?**
 
-> A: 896 is a multiple of 32 (`head_dim * n_kv_groups = 128 * 4 = 512`; `n_heads * head_dim = 16 * 128 = 2048`; 896 is divisible by both 128 and 224, the Q-lora and KV-lora ranks). It also gives a sweet-spot parameter count (~750 M active, ~1.86 B stored). 1024 would be 18% more params; 512 would be 43% fewer.
+> A: 896 is a multiple of 32 (`head_dim * n_kv_groups = 128 * 4 = 512`; `n_heads * head_dim = 16 * 128 = 2048`; 896 is divisible by both 128 and 224, the Q-lora and KV-lora ranks). It also gives a sweet-spot parameter count (~434M active, ~1.13B stored). 1024 would be 18% more params; 512 would be 43% fewer.
 
 ### Cross-links
 

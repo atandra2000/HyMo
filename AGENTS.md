@@ -65,8 +65,8 @@ Data comes from the workspace `LLM/shared_data/` pipeline (see
 
 ## Testing rules (MANDATORY — hardcoded, do not deviate)
 
-The production v1.0 model is 1.86 B params (full model construct in
-float32 ≈ 7.4 GB, more than a dev laptop has). A test must **never**
+The production v1.0 model is ~434 M active / ~1.13 B stored params (full model construct in
+float32 ≈ 4.5 GB, more than a dev laptop has). A test must **never**
 build it by default. Follow this exact style for every test:
 
 1. **Default tests must be CPU-friendly and cool.** Each test runs on
@@ -80,7 +80,7 @@ build it by default. Follow this exact style for every test:
    (``tiny_hymo_model`` / ``tiny_hymo_config`` in
    ``tests/conftest.py``), NOT from ``configs/hymo_750m.yaml``.
 3. **Heavy tests are opt-in only.** Any test that builds the
-   production model (or the full 1.86B graph) MUST be marked
+   production model (or the full 1.13B graph) MUST be marked
    ``@pytest.mark.heavy``. ``tests/conftest.py::pytest_collection_modifyitems``
    auto-skips these in the default run; they run only with
    ``pytest --run-heavy`` (CI / GPU pod). Do not remove the marker,
@@ -131,7 +131,7 @@ Violations are reviewable on `wc -l <file>` and
   PyTorch-free.
 - **Don't use NotImplementedError** for core model logic — it should
   be fully implemented and compiled.
-- Don't build the full 1.86B model in a default (non-``heavy``) test.
+- Don't build the full 1.13B model in a default (non-``heavy``) test.
 - Don't hardcode production-scale numbers into tiny-config tests.
 - Don't let a Triton kernel silently fall back to raw PyTorch during
   a default-config training run. Opt-in is explicit; failures must

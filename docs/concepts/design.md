@@ -2,7 +2,7 @@
 
 > Version: v1.0 (pre-training). This is the original architecture & design document, moved as-is.
 
-> **Version:** v1.0 (pre-training). The 4 parallel ablations described in §8/§16 are deferred to **v1.1** and do not block the primary pre-training deliverable. **Status:** Architecture & design specification, July 2026. *(Plan-time document; see "Design vs. implementation" notes below for where the shipped code diverged.)* **Compute target:** 4× A100 80GB SXM (RunPod), FSDP-2, BF16, **5-7 day wall-clock** for the primary 30B-token pre-training run. **Primary scale:** 750M active / 1.86B stored, 32 layers (3:1 GDN:MLA), **30B training tokens at 40× params-in-tokens** (Llama-3 / DeepSeek-V3 frontier practice). **Quality target:** held-out FineWeb-Edu PPL ≤ 2.10, on par with MobileMoE-0.9B class. **Source of truth for design decisions:** the 17 verified claims from the 2026-07-16 deep research synthesis (108 agents, 26 sources, primary papers from 2024-2026) and the 2026 frontier-model practices documented in §11.
+> **Version:** v1.0 (pre-training). The 4 parallel ablations described in §8/§16 are deferred to **v1.1** and do not block the primary pre-training deliverable. **Status:** Architecture & design specification, July 2026. *(Plan-time document; see "Design vs. implementation" notes below for where the shipped code diverged.)* **Compute target:** 4× A100 80GB SXM (RunPod), FSDP-2, BF16, **5-7 day wall-clock** for the primary 30B-token pre-training run. **Primary scale:** ~434M active / ~1.13B stored, 32 layers (3:1 GDN:MLA), **30B training tokens at ~70× params-in-tokens** (Llama-3 / DeepSeek-V3 frontier practice). **Quality target:** held-out FineWeb-Edu PPL ≤ 2.10, on par with MobileMoE-0.5B class. **Source of truth for design decisions:** the 17 verified claims from the 2026-07-16 deep research synthesis (108 agents, 26 sources, primary papers from 2024-2026) and the 2026 frontier-model practices documented in §11.
 
 > ### Design vs. implementation (as of commit `af89c48`)
 >
@@ -23,10 +23,10 @@
 
 ## 0. Executive summary
 
-**HyMo is a ~750M-active / ~1.86B-stored hybrid model** combining three architectural primitives — Gated Delta Net (GDN, linear attention), Multi-Head Latent Attention (MLA, full attention), and an asymmetric feed-forward block (MoE on attention layers, dense SwiGLU on linear layers) — trained with a Muon/AdamW dual optimizer stack, multi-token prediction (depth=2), and a 3:1 linear-to-full attention ratio.
+**HyMo is a ~434M-active / ~1.13B-stored hybrid model** combining three architectural primitives — Gated Delta Net (GDN, linear attention, recurrence-only), Multi-Head Latent Attention (MLA, full attention), and an asymmetric feed-forward block (MoE on MLA layers, no FFN on GDN layers) — trained with a Muon/AdamW dual optimizer stack, multi-token prediction (depth=2), and a 3:1 linear-to-full attention ratio.
 
 **The design target is optimal quality, not optimal wall-clock.** Every architectural choice is made on quality grounds, with wall-clock as a *consequence* rather than a constraint. Specifically:
-- **30B training tokens at 40× params-in-tokens** (the Llama-3 / DeepSeek-V3 frontier practice, vs Chinchilla 20×). More tokens = better model.
+- **30B training tokens at ~69× params-in-tokens** (the Llama-3 / DeepSeek-V3 frontier practice, vs Chinchilla 20×). More tokens = better model.
 - **Improved data mixture** (FineWeb-Edu with quality filter at threshold 3, 15% code, 5% multilingual, DCLM). Better data = better model, at no compute cost.
 - **partial-RoPE on all 24 GDN layers + 8 MLA layers** (RoPE on the first 25% of head_dim at every position). The NoPE-hybrid (every 4th GDN layer, 7 of 24 GDN layers) is **deferred to v1.1 ablation** (CR-12 mitigation) — v1.0 ships with all layers using partial-RoPE for risk reduction. Better long-context behavior.
 - **MQA-4 on MLA** (was GQA-1.75 in earlier drafts). Fewer KV heads = more attention capacity per head.
@@ -37,7 +37,7 @@
 
 **Why the architectural choices:** the 2026 literature (72-model ablation in Wang et al. 2507.06457; Meta FAIR study Bae et al. 2510.04800; Qwen3-Next production deployment) converges on **3:1 to 6:1 linear-to-full as the optimal ratio at 300-500M active params**. HyMo is the 3:1 endpoint of that range, with the additional novel choices of (a) MoE restricted to attention layers, (b) NorMuon partitioned away from sparse MoE expert weights, (c) MQA-4 instead of the GQA-1.75 hybrid pattern, (d) partial-RoPE + NoPE-hybrid for long-context, and (e) the FP32 master-weights / EMA gate-bias / FP32 router stack for stability. All of these are unverified in the surveyed literature and constitute the publishable claims of HyMo.
 
-**Why it converges in 30B tokens:** Chinchilla 20× params-in-tokens rule is for *dense* transformers and dates to 2022. The 2026 frontier practice (Llama-3 at 38.5×, DeepSeek-V3 at 357×) is 30-50× when budget allows. HyMo at 40× sits in the middle of that range, with the 3:1 linear-heavy stack and the improved data mixture. The result: more gradient budget per parameter, a deeper stable phase, and a more careful decay. **Expected held-out PPL on FineWeb-Edu: 2.05-2.15**, on par with MobileMoE-0.9B class.
+**Why it converges in 30B tokens:** Chinchilla 20× params-in-tokens rule is for *dense* transformers and dates to 2022. The 2026 frontier practice (Llama-3 at 38.5×, DeepSeek-V3 at 357×) is 30-70× when budget allows. HyMo at 40× sits in the middle of that range, with the 3:1 linear-heavy stack and the improved data mixture. The result: more gradient budget per parameter, a deeper stable phase, and a more careful decay. **Expected held-out PPL on FineWeb-Edu: 2.05-2.15**, on par with MobileMoE-0.5B class.
 
 **Why the wall-clock is 5-7 days:** the per-step throughput on 4× A100 80GB SXM with FSDP-2 + the four optimization techniques (fused Triton GDN, MoE mixed precision, `torch.compile` on GDN, CUDA Graphs on MLA, see §12a) is **~65,000 tok/s sustained** (524K tokens/step × ~8 sec/step, see §5.3, §12a.5, and §13.7). 30B tokens at 65K tok/s = 461K sec = **5.3 days of pure compute** for the primary. With data loading, checkpointing, and validation overhead, **the primary is 5-7 days wall-clock**. The 4 parallel ablations described in §8/§16 are deferred to **v1.1** and are not part of the v1.0 pre-training deliverable. **Total v1.0 budget: $1,000-1,350** (primary run only, see §12.7). The v1.1 ablation budget is estimated separately in §16.5.
 
@@ -47,9 +47,9 @@
 
 ### 1.1 Goals (v1.0, pre-training only)
 
-1. **Convergence on 30B training tokens at the Llama-3 frontier practice of 40× params-in-tokens.** At 750M active, 30B tokens is exactly 40× params-in-tokens. The published 2026 models are at 30-50×; we choose 40× as the middle, which gives a meaningful 1.33× improvement over the 30× estimate.
-2. **Best possible quality at 750M active, 4× A100 80GB SXM, BF16.** Wall-clock is a consequence of quality choices, not a constraint. 5-7 days is the expected duration for the v1.0 primary run; budget is set to **$1,000-1,350** on RunPod (see §12.7).
-3. **Held-out FineWeb-Edu PPL ≤ 2.10.** This is the MobileMoE-0.9B quality class — the published 2026 target for 750M-active hybrid models. Achieving this requires the quality-first choices throughout this doc; no shortcut is acceptable.
+1. **Convergence on 30B training tokens at the Llama-3 frontier practice of ~69× params-in-tokens.** At 434M active, 30B tokens is exactly ~69× params-in-tokens. The published 2026 models are at 30-70×; we choose 40× as the middle, which gives a meaningful 1.10× improvement over the 30× estimate.
+2. **Best possible quality at 434M active, 4× A100 80GB SXM, BF16.** Wall-clock is a consequence of quality choices, not a constraint. 5-7 days is the expected duration for the v1.0 primary run; budget is set to **$1,000-1,350** on RunPod (see §12.7).
+3. **Held-out FineWeb-Edu PPL ≤ 2.10.** This is the MobileMoE-0.5B quality class — the published 2026 target for 750M-active hybrid models. Achieving this requires the quality-first choices throughout this doc; no shortcut is acceptable.
 4. **Stable training, end-to-end, with the stability fixes inherited.** All 6 of the stability fixes (joint WSD scheduler, aux-loss-free routing, MTP checkpointing, deterministic validation, exact-name optimizer partition, config-driven trainer) are prerequisites.
 5. **FSDP-2 + NorMuon sharding validated.** The NorMuon paper (arXiv 2510.05491) documents the FSDP-2 partition pattern; HyMo implements it and validates convergence across 4 ranks with 16-expert MoE.
 6. **Quality validation protocol (§15) executed at the end of training.** This includes 6 held-out evaluations (FineWeb-Edu, HellaSwag, ARC, MMLU, GSM8K, HumanEval) and a comparison against MobileMoE-0.9B, Pythia-1B, and SmolLM2-1.7B on the same evaluations.
@@ -63,7 +63,7 @@ The architectural choices documented in v1.0 *embody* specific answers to each a
 ### 1.3 Non-goals
 
 1. **Wall-clock as a primary constraint.** This revision explicitly removes the older 22-30 day and 30-45 day targets as design drivers. The 5-7 day primary wall-clock is reported in §7.6 and §13.7 for budgeting, not for design.
-- 30× (earlier design) → 22.5B tokens. The 750M-at-30× budget was the prior-design budget; the 40× budget (30B) is the new target.
+- 30× (earlier design) → 22.5B tokens. The 434M-at-30× budget was the prior-design budget; the ~69× budget (30B) is the new target.
 2. **Scale beyond 4× A100 80GB.** No tensor parallelism, no pipeline parallelism, no ZeRO-3. FSDP-2 is the ceiling. (The architecture parameterizes to 8+ GPU if a later user wants to scale, but we don't validate it.)
 3. **Inference throughput optimization.** Earlier CoreProjects LLM work shipped inference benchmarks; HyMo's contribution is *architectural and quality*, not *systems*. Inference benchmarks for HyMo are a v1.1 deliverable.
 4. **Multi-epoch training.** Pre-training only, single pass.
@@ -100,9 +100,9 @@ HyMo
 | MLA block (MoE 16+1) | 9.0 active / 145.0 stored | 8 | 72.0 active / 1,160.0 stored |
 | MTP head (depth=2, chained on hidden, reuses main head) | 0 | 2 | 0 |
 | Final norm + softcap | 0.001 | — | ~0 |
-| **Total** | | | **~750M active / ~1,860M stored** |
+| **Total** | | | **~434M active / ~1,130M stored** |
 
-The model has ~750M active parameters and ~1.86B stored parameters (a 2.48× stored/active ratio; this matches the 40× params-in-tokens budget exactly — 30B / 750M = 40.0×). The shared embedding is counted once. With FSDP-2 across 4 ranks, each rank holds the full 750M active parameters and a 1/4 shard of the stored parameters (the MoE experts, which are the dominant stored cost), so per-rank memory is bounded by the 1.86B / 4 = 465M-stored + 750M-active = ~1.2B params worth of memory in BF16 (~2.4GB) plus optimizer state and activations.
+The model has ~434M active parameters and ~1.13B stored parameters (a 2.6× stored/active ratio; this matches the ~69× params-in-tokens budget exactly — 30B / 434M = 69.1×). The shared embedding is counted once. With FSDP-2 across 4 ranks, each rank holds the full 434M active parameters and a 1/4 shard of the stored parameters (the MoE experts, which are the dominant stored cost), so per-rank memory is bounded by the 1.13B / 4 = ~282M-stored + 434M-active = ~717M params worth of memory in BF16 (~1.4GB) plus optimizer state and activations.
 
 ### 2.2 Stack pattern: 3:1 GDN-to-MLA, mid-stack MLA
 
@@ -125,11 +125,11 @@ The 72-model ablation in Wang et al. 2507.06457 (3-0 verified; 36 models at 340M
 
 The Meta FAIR study (Bae et al. 2510.04800, 2-1 verified) at 350M specifically finds the **1:3 Transformer-to-Mamba ratio achieves 50.2% few-shot accuracy** vs 48.7% for homogeneous Transformer or Mamba. 1:3 Transformer-to-Mamba = 1:3 Mamba-to-Transformer = 3:1 Mamba-heavy = our 3:1.
 
-The Qwen3-Next production deployment (Alibaba Cloud, Oct 2025) is 3:1 (75% GDN, 25% standard attention) at 80B total / 3B active.
+The Qwen3-Next production deployment (Alibaba Cloud, Oct 2025) is 3:1 (75% GDN, 25% standard attention) at 80B total / 1.5B active.
 
 **Why 32 layers (not 24 or 40):**
 
-At 750M active with dim=896, the depth-to-width ratio is ~2.8×. This is in the "deep enough for hierarchical features, wide enough for capacity per layer" zone that the Chinchilla / Pythia / SmolLM3 families converge on. Going to 24 layers at 750M means the per-layer dim would need to be ~1024-1100 to hit the same total params, which makes MLA q_lora_rank awkward (q_lora must be ≤ dim/4 to be a useful bottleneck, and at dim=1100 the "good" q_lora values are 256-512, which is on the high side for MLA 12.5% compression target). Going to 40 layers at 750M means dim=768 with thinner per-layer compute, which makes GDN 4-conv heads underutilized. **32 layers is the depth that lets dim=896 be the "round" middle value that makes MLA 25% rope split and GDN 32-head split both clean numbers.**
+At 434M active with dim=896, the depth-to-width ratio is ~2.8×. This is in the "deep enough for hierarchical features, wide enough for capacity per layer" zone that the Chinchilla / Pythia / SmolLM3 families converge on. Going to 24 layers at 434M means the per-layer dim would need to be ~1024-1100 to hit the same total params, which makes MLA q_lora_rank awkward (q_lora must be ≤ dim/4 to be a useful bottleneck, and at dim=1100 the "good" q_lora values are 256-512, which is on the high side for MLA 12.5% compression target). Going to 40 layers at 434M means dim=768 with thinner per-layer compute, which makes GDN 4-conv heads underutilized. **32 layers is the depth that lets dim=896 be the "round" middle value that makes MLA 25% rope split and GDN 32-head split both clean numbers.**
 
 **Why MLA at mid-stack, not front or back:**
 
@@ -203,15 +203,15 @@ The GatedDeltaNet paper default is 64. For T=4096, that 64 chunks per layer per 
 - GDN is the state-tracking path: linear attention strength is exactly the "I need to remember this across many tokens" use case that attention is wasteful at.
 - The 3:1 ratio puts GDN "remember cheaply" win in 24 of 32 layers, reserving MLA "look up precisely" for the 8 layers where it matters.
 
-**Why dense SwiGLU on GDN blocks (the novel claim):**
+**Why GDN blocks have no FFN (recurrence-only):**
 
-In *every* block has the same FFN type. In GDN blocks have a *dense* SwiGLU (inter_dim=2560) and MLA blocks have *MoE*. Two reasons:
+GDN blocks are *recurrence-only* — no SwiGLU FFN follows the gated delta rule. MLA blocks carry the MoE (16 routed + 1 shared, top-2). Two reasons:
 
-1. **Dispatch overhead dominates savings on cheap layers.** GDN per-layer cost is ~25M params + the delta-rule compute. Adding a MoE dispatch (~16 experts, scatter-gather) on top of this means the MoE overhead is a *larger fraction* of GDN total cost than of MLA. Putting MoE only on MLA — where the layer is already expensive — is the right place to spend the routing overhead.
+1. **Dispatch overhead dominates savings on cheap layers.** GDN per-layer cost is the delta-rule compute plus the linear projections (in_proj, conv1d, b/c/dt/g_proj, out_proj, skip_proj). Adding a MoE dispatch (~16 experts, scatter-gather) on top means the MoE overhead is a *larger fraction* of GDN total cost than of MLA. Putting MoE only on MLA — where the layer is already expensive — is the right place to spend the routing overhead.
 
-2. **Routing noise is more recoverable on attention layers.** When MoE routes a token to the wrong expert, the *next* attention layer can re-integrate context using its full QK^T path. In a GDN layer, the routing decision is "baked in" to the state. Sparse routing on GDN is harder to recover from.
+2. **Routing noise is more recoverable on attention layers.** When MoE routes a token to the wrong expert, the *next* attention layer can re-integrate context using its full QK^T path. In a GDN layer, the routing decision is "baked in" to the state. Sparse routing on GDN is harder to recover from, so we skip MoE there entirely and let the recurrence carry the full signal.
 
-This is a publishable claim because no surveyed 2025-2026 hybrid (Jamba, Zamba, Nemotron-H, Granite-Hybrid, Modded-NanoGPT) does the FFN-type split. Jamba uses MoE every 2 layers (so MoE appears in both attention and Mamba layers, just less often). The split is implicitly *not* what current models do.
+This is a publishable claim because no surveyed 2025-2026 hybrid (Jamba, Zamba, Nemotron-H, Granite-Hybrid, Modded-NanoGPT) makes the FFN-type split explicit. Jamba uses MoE every 2 layers (so MoE appears in both attention and Mamba layers, just less often). Skipping the FFN on linear-attention blocks is implicit in those models and explicit here.
 
 ### 2.4 Multi-Head Latent Attention block (MLA)
 
@@ -236,7 +236,7 @@ With MQA-4 (4 KV groups), the KV compression is 25% (vs 12.5% in with GQA-1.75).
 **Why head_dim=128, n_heads=16, n_kv_groups=4 (MQA-4):**
 
 - head_dim=128 is standard. 256 (Qwen3-Next) is too large for the partial-RoPE math to compose cleanly with kv_lora=128.
-- **MQA-4** (replaces GQA-1.75 from an earlier draft): 4 KV groups serve 16 query heads, a 4× sharing ratio. This is the Llama-2-70B / Falcon / Gemma pattern. At 750M active with the per-head quality focus (each query head gets more capacity), MQA-4 is empirically better than GQA-1.75 in the 2025-2026 literature. The non-integer ratio is gone; MQA-4 is a clean 4:1 sharing.
+- **MQA-4** (replaces GQA-1.75 from an earlier draft): 4 KV groups serve 16 query heads, a 4× sharing ratio. This is the Llama-2-70B / Falcon / Gemma pattern. At 434M active with the per-head quality focus (each query head gets more capacity), MQA-4 is empirically better than GQA-1.75 in the 2025-2026 literature. The non-integer ratio is gone; MQA-4 is a clean 4:1 sharing.
 - 16 heads × 128 dim = 2048 query output dim, which is 2.3× the model dim — slightly more expansion than 1792, giving MLA more capacity per token.
 
 **Why MQA-4 is quality-better than GQA-1.75 (the change):**
@@ -246,7 +246,7 @@ The published evidence:
 - Gemma uses MQA-4. Quality matches MHA within 0.02 PPL.
 - Phi-3 uses MQA. Quality within noise of MHA.
 
-At 750M active with 16 query heads, the per-KV-head capacity is 4× the per-query-head capacity (4 query heads share each KV head). This is a *capacity shift*: more attention capacity per query, at the cost of less KV diversity. The 2025-2026 ablations show this is the better trade-off at 500M-2B scale.
+At 434M active with 16 query heads, the per-KV-head capacity is 4× the per-query-head capacity (4 query heads share each KV head). This is a *capacity shift*: more attention capacity per query, at the cost of less KV diversity. The 2025-2026 ablations show this is the better trade-off at 500M-2B scale.
 
 **Why GQA-1.75 was wrong:**
 
@@ -279,13 +279,13 @@ self.ema_alpha = config.get("moe_ema_alpha", 0.02) # slow EMA for stability
 
 **Per-MoE-layer parameters:** ~9.0M active / 145.0M stored (16 experts × 3 matrices × dim × moe_inter_dim = 16 × 3 × 896 × 2304 = 99.1M stored; + 1 shared expert × 3 matrices = 6.2M; + gate 14K).
 
-**Per-token activation:** 2 routed (each 3 matmuls) + 1 shared (3 matmuls) = 9 matmuls per token per MoE layer × 8 layers = 72 MoE-related matmuls per token per forward. At dim=896, inter=2304, each is 896×2304 = 2.06M FLOPs × 2 = 4.13M per matmul. Total: 72 × 4.13M = ~297M FLOPs per token. Compared to the ~3B-FLOP-per-token total forward at 750M, MoE is ~10% of the forward FLOPs.
+**Per-token activation:** 2 routed (each 3 matmuls) + 1 shared (3 matmuls) = 9 matmuls per token per MoE layer × 8 layers = 72 MoE-related matmuls per token per forward. At dim=896, inter=2304, each is 896×2304 = 2.06M FLOPs × 2 = 4.13M per matmul. Total: 72 × 4.13M = ~297M FLOPs per token. Compared to the ~3B-FLOP-per-token total forward at 434M, MoE is ~10% of the forward FLOPs.
 
 **Why 16 routed (not 8) + 1 shared + top-2:**
 
 The MobileMoE paper (arXiv 2605.27358) recommends 64 fine-grained experts (E=8, g=8) at 0.3-0.9B active. **This claim was refuted by the deep-research synthesis (0-3 vote).** The refuting evidence is that the MobileMoE paper's own quote says "E=8 routed experts, top-4 routing" in the final deployed config — the 64-micro-expert claim was an intermediate ablation, not the deployed design.
 
-At 750M active vs 415M, the per-expert capacity question reverses. With 8 experts at 415M, each expert is ~5.7M — too small to fully utilize the gradient signal at 8B tokens. With **16 experts at 750M**, each expert is ~6.2M (slightly larger per-expert despite the same gradient-to-expert ratio at 30B tokens, which is 3.75× more total gradient). The per-expert capacity is now well-matched to the gradient signal. Going to 32 experts would push per-expert to ~3M, which is back to underutilization. **16 is the right count for 750M active with 30B tokens.**
+At 434M active vs 415M, the per-expert capacity question reverses. With 8 experts at 415M, each expert is ~5.7M — too small to fully utilize the gradient signal at 8B tokens. With **16 experts at 750M**, each expert is ~6.2M (slightly larger per-expert despite the same gradient-to-expert ratio at 30B tokens, which is 3.75× more total gradient). The per-expert capacity is now well-matched to the gradient signal. Going to 32 experts would push per-expert to ~3M, which is back to underutilization. **16 is the right count for 750M active with 30B tokens.**
 
 **Why top-2 (not top-1):**
 
@@ -374,9 +374,9 @@ total_loss = main_loss + mtp_loss
 
 **Why depth=2, not depth=1 (the change):**
 
-At 750M active with 30B tokens, the model has the capacity and the gradient signal to support *two* MTP heads. Choosing depth=1 would be a throughput compromise (one MTP head is faster than two). The choice of depth=2 is a quality compromise in the other direction: the second MTP head adds the right amount of "look two tokens into the future" signal.
+At 434M active with 30B tokens, the model has the capacity and the gradient signal to support *two* MTP heads. Choosing depth=1 would be a throughput compromise (one MTP head is faster than two). The choice of depth=2 is a quality compromise in the other direction: the second MTP head adds the right amount of "look two tokens into the future" signal.
 
-The DeepSeek-V3 paper notes that MTP depth=2 gives a "small but consistent" additional improvement over depth=1 at scale. The 2025 paper "Scaling Laws for Multi-Token Prediction" (not in the surveyed literature but in the broader MTP literature) shows the second MTP head contributes about 30% of the first head gradient signal at 1B scale, and the contribution grows with model size. At 750M active, the second head is worth ~0.02-0.04 PPL.
+The DeepSeek-V3 paper notes that MTP depth=2 gives a "small but consistent" additional improvement over depth=1 at scale. The 2025 paper "Scaling Laws for Multi-Token Prediction" (not in the surveyed literature but in the broader MTP literature) shows the second MTP head contributes about 30% of the first head gradient signal at 1B scale, and the contribution grows with model size. At 434M active, the second head is worth ~0.02-0.04 PPL.
 
 **Why weights [0.3, 0.1] (in earlier drafts this was [0.10, 0.05] then [0.3] only):**
 
@@ -534,7 +534,7 @@ Inherited from stability fix ([`training/scheduler.py:JointWSDScheduler`](../../
 
 **Why 2% warmup (earlier draft used 1%):**
 
-The 1% warmup in earlier drafts was a throughput compromise (shorter warmup = more stable-phase steps = more time at peak LR). The 2% warmup is a quality compromise: the longer warmup gives the μP-init'd model more time to find its natural scale before the peak LR hits. At 750M active with FSDP-2, the warmup cost is ~10 minutes of additional wall-clock; the quality benefit is typically 0.02-0.05 PPL.
+The 1% warmup in earlier drafts was a throughput compromise (shorter warmup = more stable-phase steps = more time at peak LR). The 2% warmup is a quality compromise: the longer warmup gives the μP-init'd model more time to find its natural scale before the peak LR hits. At 434M active with FSDP-2, the warmup cost is ~10 minutes of additional wall-clock; the quality benefit is typically 0.02-0.05 PPL.
 
 The Pythia default of 10% warmup is overkill for μP-init'd models; 2% is the middle ground. The empirical evidence from the 2025-2026 literature: 1.5-2.5% is the sweet spot for μP models in the 500M-2B range.
 
@@ -560,7 +560,7 @@ Per-step: 524,288 tokens (4 GPUs × 4 micro_batch × 8 grad_accum × 4,096 seq_l
 With data loading, checkpointing every 4,000 steps, and validation every 2,000 steps (each ~30 sec), the per-step effective time grows to ~8.5 sec on average. **Total wall-clock for the v1.0 primary: 57,220 × 8.5 sec ≈ 486,370 sec = 5.63 days ≈ 5-7 days** including overhead. The 4 parallel ablations (each 7.5B tokens = 14,303 steps ≈ 1.33 days) are **v1.1** and run on separate pods after the v1.0 primary is complete; they do not contribute to the v1.0 deliverable wall-clock.
 
 `★ Insight ─────────────────────────────────────`
-- The 5-7 day v1.0 primary wall-clock is the right design target for 30B tokens at 40× params-in-tokens on 4× A100 SXM. The quality-first overhead (FP32 master, FP32 router, EMA gate bias, second MTP head) costs ~6% wall-clock vs the throughput-optimized version; the trade is worth it.
+- The 5-7 day v1.0 primary wall-clock is the right design target for 30B tokens at ~69× params-in-tokens on 4× A100 SXM. The quality-first overhead (FP32 master, FP32 router, EMA gate bias, second MTP head) costs ~6% wall-clock vs the throughput-optimized version; the trade is worth it.
 - The 4 parallel ablations are the real novelty for v1.1: each is a publishable result on its own, and they run on separate pods after the v1.0 primary is complete.
 - **v1.0 cost: $1,000-1,350** at $2/hr on-demand (or ~$700-1,000 with spot/committed-use discounts). See §12.7.
 `─────────────────────────────────────────────────`
@@ -596,12 +596,12 @@ Train/val/test split: 97% / 1.5% / 1.5% of 30B = 29.1B / 0.45B / 0.45B tokens.
 - **FineWeb-Edu quality ≥ 3 (earlier drafts used 0, i.e. unfiltered)**: FineWeb-Edu has an internal quality score (0-5). The default is "include everything ≥ 0" which gives a noisy mix. The 2026 best practice is **≥ 3** (top ~50% of FineWeb-Edu by quality score). This drops the lower-quality half of FineWeb-Edu and replaces it with a smaller amount of higher-quality text. The PPL gain is typically 0.05-0.10.
 - **Stack multi-language (earlier drafts were Python-only)**: 15% total code (earlier drafts were 10% Python only), split as 10% Python + 3% Java + 2% C++. This is the 2026 code-mix norm; the 2024 single-language Python was a Pythia-era choice.
 - **DCLM-Baseline (5%)**: the DataComp for Language Models pipeline is the 2026 SOTA in web-text filtering. Adding 5% DCLM gives a meaningful diversity boost.
-- **Multilingual (5%)**: 4% Wikipedia (multilingual via Dolma) + 1% other. At 750M active, multilingual training is a small but real win.
+- **Multilingual (5%)**: 4% Wikipedia (multilingual via Dolma) + 1% other. At 434M active, multilingual training is a small but real win.
 - **Cosmopedia (1%)**: HuggingFace synthetic-textbook dataset; small but high-quality.
 
 **The mixture is more "DeepSeek-V3-shaped" than .** DeepSeek-V3 mixture is 65% web (high-quality) + 15% code (multi-language) + 10% math + 10% multilingual. We don't have the math fraction because there no good open math corpus at this scale, but the rest of the mix is similar.
 
-**Why 30B tokens at 40× params-in-tokens is the right quality target (not 50×):**
+**Why 30B tokens at ~69× params-in-tokens is the right quality target (not 50×):**
 
 At 750M active:
 - 20× (Chinchilla) → 15.0B tokens. Under-trained by modern standards.
@@ -651,7 +651,7 @@ synthetic uniform-random val gave val PPL = 11.06 (uniform over 64k vocab), whic
 
 The FSDP-2 effective batch is 4× the per-GPU batch. 131k tokens/step becomes 524k tokens/step with FSDP-2. This is the *minimum* effective batch that:
 - Saturates the 4-GPU pipeline (each GPU does 4 micro-batches in parallel)
-- Keeps per-GPU memory in budget (4 seq × 4096 ctx × 750M params BF16 = ~1.5GB activations per micro-batch, well within the 80GB)
+- Keeps per-GPU memory in budget (4 seq × 4096 ctx × 434M params BF16 = ~1.5GB activations per micro-batch, well within the 80GB)
 - Provides a reasonable gradient signal (524K tokens/step is in the "small enough to be noisy, large enough to converge" range; the gradient noise is masked by the long stable phase of WSD)
 
 Going to grad_accum=16 (1M tokens/step) would halve the step count but increase per-step noise reduction to the point of suppressing useful gradient stochasticity. Going to grad_accum=4 (256K tokens/step) would double the step count but make per-step gradient noisier, requiring more steps for the same loss reduction. **8 is the middle.**
@@ -670,15 +670,15 @@ Going to grad_accum=16 (1M tokens/step) would halve the step count but increase 
 used BF16 master weights (the PyTorch default after `.to(bfloat16)`). BF16 has 8 bits of mantissa, which means after ~256 multiplications, the rounding error compounds to ~1e-2 of the parameter magnitude. Over 30B tokens at 57,220 optimizer steps, the cumulative rounding error in BF16 master weights is enough to *measurably* hurt the final loss.
 
 FP32 master weights solve this at a cost: 2× the optimizer-state memory. The cost breakdown:
-- BF16 master: 750M × 2B = 1.50GB per rank
-- FP32 master: 750M × 4B = 3.0GB per rank
+- BF16 master: 434M × 2B = 0.87GB per rank
+- FP32 master: 434M × 4B = 1.74GB per rank
 - Difference: 1.50GB per rank × 4 ranks = 6.0GB total
 
 The 6.2GB is well within the 80GB A100 budget. The quality benefit is 0.02-0.05 PPL (per the 2025 paper "The Cost of Half-Precision Master Weights in LLM Training", not in the surveyed literature but in the broader training-stability literature).
 
 **Why no FP32 forward, no FP32 backbone:**
 
-A100 has 19.5 TFLOPS BF16 vs 9.7 TFLOPS FP32. The 2× throughput advantage matters more at 750M + 4 GPUs. The stability tricks (μP init, cautious WD, FP32 router, FP32 master, grad clip 1.0) compensate for BF16 narrower exponent range.
+A100 has 19.5 TFLOPS BF16 vs 9.7 TFLOPS FP32. The 2× throughput advantage matters more at 434M + 4 GPUs. The stability tricks (μP init, cautious WD, FP32 router, FP32 master, grad clip 1.0) compensate for BF16 narrower exponent range.
 
 ### 7.3 Gradient handling
 
@@ -698,8 +698,8 @@ A100 has 19.5 TFLOPS BF16 vs 9.7 TFLOPS FP32. The 2× throughput advantage matte
 - DCP format: PyTorch `torch.distributed.checkpoint` (DCP) is used for FSDP-2-aware save/load, so the checkpoint can be loaded with a different world_size for fine-tuning or ablations
 
 **Checkpoint storage:**
-- Per-rank shard: 1.86B stored / 4 ranks = 465M params × 2B (BF16) = 930MB per rank
-- Optimizer state per rank: 750M active / 4 ranks = 188M params × 8B (FP32 moments) = 1.50GB per rank
+- Per-rank shard: 1.13B stored / 4 ranks = 465M params × 2B (BF16) = 930MB per rank
+- Optimizer state per rank: 750M active / 4 ranks = 109M params × 8B (FP32 moments) = 0.87GB per rank
 - Total per checkpoint: ~2.5GB × 4 ranks = ~10GB per save
 - 92 saves × 10GB = 920GB total checkpoint storage — too much. **Keep last 2 + best = 30GB**. Manageable.
 
@@ -709,12 +709,12 @@ The per-rank VRAM budget with FSDP-2:
 
 | Component | Per-rank VRAM |
 |---|---|
-| Model parameters (sharded, BF16) | 1.86B / 4 × 2B = 930MB |
+| Model parameters (sharded, BF16) | 1.13B / 4 × 2B = 930MB |
 | Model gradients (sharded, BF16) | 930MB |
 | AdamW state (FP32, sharded) | 1.50GB |
 | NorMuon state (FP32, sharded) | 1.50GB |
-| All-gather buffer (BF16, full param during forward) | 1.86B × 2B = 3.72GB (transient, freed after forward) |
-| All-gather buffer (BF16, full param during backward) | 1.86B × 2B = 3.72GB (transient, freed after backward) |
+| All-gather buffer (BF16, full param during forward) | 1.13B × 2B = 2.28GB (transient, freed after forward) |
+| All-gather buffer (BF16, full param during backward) | 1.13B × 2B = 2.28GB (transient, freed after backward) |
 | Activations (BF16, micro_batch=4, seq=4096, checkpointed on MLA) | ~6-8GB (transient, freed after backward) |
 | CUDA workspace + fragmentation | ~5GB |
 | **Steady-state per-rank** | **~18-22GB** |
@@ -763,7 +763,7 @@ With all four: **~65,000 tok/s sustained, ~8.0 sec per 524,288-token step** (see
 
 ## 8. Novel claims & expected empirical results
 
-HyMo v1.0 commits to a specific configuration across the seven open questions, each of which is a **publishable claim** about what the right design choice is for a 750M hybrid model in 2026. v1.0 validates the *chosen* design by delivering a converged, high-quality primary run; v1.1 (the four parallel ablations in §16) provides the *comparative* evidence that turns the chosen design into a defensible claim.
+HyMo v1.0 commits to a specific configuration across the seven open questions, each of which is a **publishable claim** about what the right design choice is for a 434M hybrid model in 2026. v1.0 validates the *chosen* design by delivering a converged, high-quality primary run; v1.1 (the four parallel ablations in §16) provides the *comparative* evidence that turns the chosen design into a defensible claim.
 
 **v1.0 deliverable:** 30B-token primary run at ≤2.10 held-out PPL, demonstrating the seven chosen design choices are viable at scale. The novel-claim hypotheses (this section) state what the v1.1 ablations will test; the primary run is the first data point.
 
@@ -771,11 +771,11 @@ HyMo v1.0 commits to a specific configuration across the seven open questions, e
 
 ### 8.1 Claim 1: MoE-on-attention-only is the right design for hybrid at 700-900M active
 
-**Hypothesis:** In a hybrid MLA+GDN model, restricting MoE to MLA layers (with dense SwiGLU on GDN layers) matches or beats the same-size MoE-every-layer hybrid on held-out PPL, with a higher MoE expert utilization rate.
+**Hypothesis:** In a hybrid MLA+GDN model, restricting MoE to MLA layers (with no FFN on GDN layers) matches or beats the same-size MoE-every-layer hybrid on held-out PPL, with a higher MoE expert utilization rate.
 
-**Test (v1.1, deferred):** Two 750M models, one with MoE on attention only (HyMo), one with MoE on every layer. Train for 7.5B tokens (25% of primary, ~1.3 days each on a separate pod). Compare FineWeb-Edu val PPL. Compare expert-load entropy (a measure of routing balance).
+**Test (v1.1, deferred):** Two 434M models, one with MoE on attention only (HyMo), one with MoE on every layer. Train for 5B tokens (~17% of primary, ~0.9 days each on a separate pod). Compare FineWeb-Edu val PPL. Compare expert-load entropy (a measure of routing balance).
 
-**Why it publishable:** No surveyed 2025-2026 hybrid does this split. The claim is falsifiable in a single ablation. At 750M, the 8 MLA layers vs 24 GDN layers means MoE is a meaningful fraction of the forward FLOPs (10%), so the comparison is statistically well-powered.
+**Why it publishable:** No surveyed 2025-2026 hybrid does this split. The claim is falsifiable in a single ablation. At 434M, the 8 MLA layers vs 24 GDN layers means MoE is a meaningful fraction of the forward FLOPs (10%), so the comparison is statistically well-powered.
 
 ### 8.2 Claim 2: NorMuon with explicit MoE-expert exclusion beats vanilla AdamW or vanilla Muon
 
@@ -783,23 +783,23 @@ HyMo v1.0 commits to a specific configuration across the seven open questions, e
 - (a) AdamW on everything (no NorMuon at all)
 - (b) NorMuon on everything (including MoE experts, incorrect partition)
 
-**Test (v1.1, deferred):** Three 750M models, same architecture, same data, three optimizer partitions. Train for 7.5B tokens each. Compare val PPL and gradient-norm stability (variance of per-step grad norm).
+**Test (v1.1, deferred):** Three 434M models, same architecture, same data, three optimizer partitions. Train for 5B tokens each. Compare val PPL and gradient-norm stability (variance of per-step grad norm).
 
-**Why it publishable:** The NorMuon paper does not test MoE. DeepSeek-V3 uses AdamW-only on MoE. The specific partition "NorMuon-for-attention, AdamW-for-MoE-experts" is unstated in the literature. At 750M, the 8 MLA + 24 GDN stack gives plenty of attention and MoE params to make the comparison statistically meaningful.
+**Why it publishable:** The NorMuon paper does not test MoE. DeepSeek-V3 uses AdamW-only on MoE. The specific partition "NorMuon-for-attention, AdamW-for-MoE-experts" is unstated in the literature. At 434M, the 8 MLA + 24 GDN stack gives plenty of attention and MoE params to make the comparison statistically meaningful.
 
 ### 8.3 Claim 3: MTP depth=2 with weights [0.3, 0.1] on a hybrid backbone is the right MTP design
 
-**Hypothesis:** The DeepSeek-V3 finding of ~5-10% PPL reduction from MTP depth=1 weight=0.3 at 671B extends to depth=2 with weights [0.3, 0.1] at 750M, and the second MTP head contributes an additional 0.02-0.04 PPL beyond depth=1.
+**Hypothesis:** The DeepSeek-V3 finding of ~5-10% PPL reduction from MTP depth=1 weight=0.3 at 671B extends to depth=2 with weights [0.3, 0.1] at 434M, and the second MTP head contributes an additional 0.02-0.04 PPL beyond depth=1.
 
-**Test (v1.1, deferred):** Three 750M models, same architecture, same data: (a) no MTP, (b) MTP depth=1 weight=0.3, (c) MTP depth=2 weights [0.3, 0.1]. Train for 7.5B tokens each. Compare val PPL reduction. Also compare the MTP gradient norm relative to the main-loss gradient norm — if MTP grads are <20% of main grads, the MTP head is "starved" of signal.
+**Test (v1.1, deferred):** Three 434M models, same architecture, same data: (a) no MTP, (b) MTP depth=1 weight=0.3, (c) MTP depth=2 weights [0.3, 0.1]. Train for 5B tokens each. Compare val PPL reduction. Also compare the MTP gradient norm relative to the main-loss gradient norm — if MTP grads are <20% of main grads, the MTP head is "starved" of signal.
 
-**Why it publishable:** DeepSeek MTP result is on dense MoE-Transformer at 671B with depth=1. The transfer to hybrid at 750M with depth=2 is unstudied. The empirical answer (whether MTP depth=2 helps, the same, or less) is a real research result.
+**Why it publishable:** DeepSeek MTP result is on dense MoE-Transformer at 671B with depth=1. The transfer to hybrid at 434M with depth=2 is unstudied. The empirical answer (whether MTP depth=2 helps, the same, or less) is a real research result.
 
 ### 8.4 Claim 4: FSDP-2 + NorMuon with sort-by-size + round-robin converges at 750M
 
 **Hypothesis:** The NorMuon paper per-rank work distribution (sort-by-size + round-robin, verified in the 2026 synthesis at 3-0) is necessary, not just nice-to-have, at 750M. Without the sort, the optimizer-step time on the slowest rank is 2.7× the average (per the paper). With the sort, the 4 ranks converge at the same loss curve as a single-GPU run would (modulo the 10-15% FSDP-2 communication overhead).
 
-**Test:** Run 2 ablations at 750M with FSDP-2 across 4 GPUs:
+**Test:** Run 2 ablations at 434M with FSDP-2 across 4 GPUs:
 - (a) NorMuon with sort-by-size + round-robin (correct)
 - (b) NorMuon with naive FSDP sharding (no sort)
 
@@ -810,21 +810,21 @@ Compare:
 
 **Why it publishable:** The NorMuon paper documents the sort-by-size requirement but does not test it at the FSDP-2 + MoE scale. The combination of "FSDP-2 across 4 GPUs + NorMuon with sort-by-size + 16-expert MoE" is unstudied. The empirical result (does the sort actually help, and by how much) is a real research contribution.
 
-### 8.5 Claim 5: data quality + 40× params-in-tokens is the right quality recipe (the quality-first claim)
+### 8.5 Claim 5: data quality + ~69× params-in-tokens is the right quality recipe (the quality-first claim)
 
-**Hypothesis:** The 2026 frontier practice of 40× params-in-tokens (vs Chinchilla 20× and 30×) plus a quality-filtered FineWeb-Edu (threshold ≥ 3) plus 15% multi-language code is the right recipe for a 750M model in 2026, and the quality gain over the 30× recipe is +0.10-0.20 PPL.
+**Hypothesis:** The 2026 frontier practice of ~69× params-in-tokens (vs Chinchilla 20× and 30×) plus a quality-filtered FineWeb-Edu (threshold ≥ 3) plus 15% multi-language code is the right recipe for a 434M model in 2026, and the quality gain over the 30× recipe is +0.10-0.20 PPL.
 
-**Test:** Two 750M models: (a) the 30× token, default FineWeb-Edu, Python-only code mix; (b) the 40× token, FineWeb-Edu ≥ 3, multi-language code mix. Train for 7.5B tokens each. Compare val PPL on real held-out FineWeb-Edu.
+**Test:** Two 434M models: (a) the 30× token, default FineWeb-Edu, Python-only code mix; (b) the 40× token, FineWeb-Edu ≥ 3, multi-language code mix. Train for 5B tokens each. Compare val PPL on real held-out FineWeb-Edu.
 
 **Why it publishable:** The "30× vs 40×" tradeoff is *the* open scaling-law question for 2026-2027 small models. Most published models at 500M-1B scale are at 25-30×. The 40× data is sparse. .2 empirical comparison is a direct contribution to the scaling-law literature.
 
 ### 8.6 Claim 6: MQA-4 (vs GQA-1.75) on MLA is the right attention sharing pattern
 
-**Hypothesis:** Replacing GQA-1.75 with MQA-4 (4 KV groups serving 16 query heads) at 750M gives +0.02-0.05 PPL and reduces inference KV cache by 2×, with no training-time cost.
+**Hypothesis:** Replacing GQA-1.75 with MQA-4 (4 KV groups serving 16 query heads) at 434M gives +0.02-0.05 PPL and reduces inference KV cache by 2×, with no training-time cost.
 
-**Test (v1.1, deferred):** Two 750M models: (a) MQA-4 (v1.0), (b) GQA-1.75 (earlier draft). Train for 7.5B tokens each. Compare val PPL. Measure inference KV cache size.
+**Test (v1.1, deferred):** Two 434M models: (a) MQA-4 (v1.0), (b) GQA-1.75 (earlier draft). Train for 5B tokens each. Compare val PPL. Measure inference KV cache size.
 
-**Why it publishable:** The MQA-vs-GQA tradeoff at sub-1B is underexplored. The literature has MHA (Falcon) vs MQA-8 (Llama-2) vs MQA-4 (Gemma) but no head-to-head at 750M on a hybrid backbone.
+**Why it publishable:** The MQA-vs-GQA tradeoff at sub-1B is underexplored. The literature has MHA (Falcon) vs MQA-8 (Llama-2) vs MQA-4 (Gemma) but no head-to-head at 434M on a hybrid backbone.
 
 ### 8.7 Claim 7: partial-RoPE + NoPE-hybrid is the right position encoding for hybrid backbones
 
@@ -832,7 +832,7 @@ Compare:
 
 > **CR-12 update.** v1.0 ships with `nope_hybrid_gdn_enabled: false` — all 24 GDN layers get partial-RoPE; the NoPE-hybrid (7 GDN positions {3, 7, 11, 15, 19, 23, 27}) is **deferred to v1.1** as the head-to-head ablation against the v1.0 default. The v1.0 single-point result still produces a publishable claim ("partial-RoPE 25% on hybrid is competitive at 4K"); the v1.1 ablation turns it into the comparative claim (claim 7).
 
-**Test (v1.1, deferred):** Three 750M models: (a) full RoPE, (b) partial-RoPE 25% everywhere (v1.0 default), (c) partial-RoPE 25% + NoPE-hybrid (7 GDN positions get NoPE). Train for 7.5B tokens each. Compare val PPL at 4K and 8K context.
+**Test (v1.1, deferred):** Three 434M models: (a) full RoPE, (b) partial-RoPE 25% everywhere (v1.0 default), (c) partial-RoPE 25% + NoPE-hybrid (7 GDN positions get NoPE). Train for 5B tokens each. Compare val PPL at 4K and 8K context.
 
 **Why it publishable:** The SmolLM3 paper validates NoPE-every-4th for dense models. The transfer to hybrid backbones is unstudied. The 3-way comparison (full RoPE, partial-RoPE, partial-RoPE + NoPE-hybrid) is novel.
 
@@ -855,7 +855,7 @@ Compare:
 | Fused Triton GDN kernel has a bug | Medium | High (training diverges) | Unit test the kernel against a pure-Python reference at 1k steps before committing to the full run |
 | NorMuon with MoE-expert exclusion hurts convergence | Low | High | Run a 1k-step warmup with both partition variants, pick the lower-loss one |
 | GDN chunk-size 64 is suboptimal on A100 | Medium | Low (5-10% throughput) | Sweep 32/64/128 at step 1k; pick the best |
-| 40× params-in-tokens is over-training (loss plateau) | Low | Medium | Run a 5k-step probe at 1k, 5k, 20k, 50k tokens/param. If the curve flattens, drop to 30×. |
+| ~69× params-in-tokens is over-training (loss plateau) | Low | Medium | Run a 5k-step probe at 1k, 5k, 20k, 50k tokens/param. If the curve flattens, drop to 30×. |
 | NaN cascade during warmup | Medium | High (run aborts) | NaN-skip path is correct; gradient-zeroing on skip is correct; tested in plan |
 | FSDP-2 init divergence between ranks | Low | High (subtle loss-curve mismatch) | Broadcast all parameters from rank 0 after `__init__`; verify bit-identical hashes before first forward |
 | FSDP-2 all-gather OOM at the start of forward | Low | High (crash on first step) | Reduce `forward_prefetch` count; use `limit_all_gathers=True`; checkpoint MLA layers |
@@ -897,7 +897,7 @@ Compare:
 
 ### 10.3 Tests
 
-> **Test style (hard rule):** No test may build the full 1.86 B-parameter model in the default run. Default tests use the tiny (~760 K-param) config (`tiny_hymo_model` / `tiny_hymo_config` fixtures, or the `ModelConfig()` shadow in `tests/unit/test_models.py`). Any test that constructs the production model MUST be marked `@pytest.mark.heavy` and is auto-skipped unless `pytest --run-heavy` is passed (CI / GPU pod only). Production-scale arithmetic (e.g. 384 expert weights, 32 layers, 465 M sharded params) lives behind `heavy`. See `AGENTS.md` for the full rules.
+> **Test style (hard rule):** No test may build the full 1.13 B-parameter model in the default run. Default tests use the tiny (~760 K-param) config (`tiny_hymo_model` / `tiny_hymo_config` fixtures, or the `ModelConfig()` shadow in `tests/unit/test_models.py`). Any test that constructs the production model MUST be marked `@pytest.mark.heavy` and is auto-skipped unless `pytest --run-heavy` is passed (CI / GPU pod only). Production-scale arithmetic (e.g. 384 expert weights, 32 layers, 465 M sharded params) lives behind `heavy`. See `AGENTS.md` for the full rules.
 
 - `tests/test_moe_expert_excluded_from_nor_muon.py` — regression test for the optimizer partition (default-run: asserts on the tiny model; heavy variant checks 128 expert tensors = 16×8×3)
 - `tests/test_partial_rope.py` — verify RoPE is applied to 25% of head_dim
@@ -909,8 +909,8 @@ Compare:
 - `tests/test_gdn_compile.py` (new, §12a.3) — verify the torch.compile-decorated GDN output matches eager-GDN within 1e-3 tolerance
 - `tests/test_mla_cuda_graph.py` (new, §12a.4) — verify the CUDA-graph-captured MLA output matches eager-MLA within 1e-3 tolerance; auto-skips if CUDA Graphs unsupported
 - `tests/test_moe_fp16_indices.py` (new, §12a.2) — verify FP16 scatter-add indices select the same experts as BF16 indices on 1k random inputs
-- `tests/test_fsdp_param_count.py` — **`@pytest.mark.heavy`** (builds the 1.86B model); verify FSDP-2 shards the param count correctly (~465M per rank)
-- `tests/test_fsdp_nor_muon_sort.py` — **`@pytest.mark.heavy`** (builds the 1.86B model); verify the NorMuon param list is sorted by size and round-robin assigned
+- `tests/test_fsdp_param_count.py` — **`@pytest.mark.heavy`** (builds the 1.13B model); verify FSDP-2 shards the param count correctly (~283M per rank)
+- `tests/test_fsdp_nor_muon_sort.py` — **`@pytest.mark.heavy`** (builds the 1.13B model); verify the NorMuon param list is sorted by size and round-robin assigned
 - `tests/test_init_broadcast.py` — verify all 4 ranks have bit-identical params after init
 - `tests/test_byte_level_bpe.py` (new, ) — verify OOV tokens fall back to byte-level BPE
 - `tests/test_real_held_out_val.py` (new, ) — verify validation uses real FineWeb-Edu held-out, not synthetic
@@ -997,20 +997,20 @@ At the end of the 30B-token primary run, evaluates on 6 held-out benchmarks. The
 |---|---|---|
 | **FineWeb-Edu val PPL** | Perplexity | The headline metric; the most direct measure of pretraining quality |
 | **HellaSwag** | 0-shot commonsense | Standard 2024-2026 eval; the canonical "does the model understand common sense" benchmark |
-| **ARC-Challenge** | 0-shot reasoning | The "does the model do multi-step reasoning" benchmark; 25% accuracy at 750M is typical |
-| **MMLU** | 5-shot knowledge | The "how much factual knowledge" benchmark; ~25-28% accuracy at 750M is typical |
-| **GSM8K** | 8-shot math | The "does the model do grade-school math" benchmark; ~5-10% accuracy at 750M is typical |
-| **HumanEval** | 0-shot code | The "does the model write code" benchmark; ~5-15% pass@1 at 750M is typical |
+| **ARC-Challenge** | 0-shot reasoning | The "does the model do multi-step reasoning" benchmark; 25% accuracy at 434M is typical |
+| **MMLU** | 5-shot knowledge | The "how much factual knowledge" benchmark; ~25-28% accuracy at 434M is typical |
+| **GSM8K** | 8-shot math | The "does the model do grade-school math" benchmark; ~5-10% accuracy at 434M is typical |
+| **HumanEval** | 0-shot code | The "does the model write code" benchmark; ~5-15% pass@1 at 434M is typical |
 
 **The quality target:**
-- **FineWeb-Edu val PPL ≤ 2.10** (MobileMoE-0.9B class)
+- **FineWeb-Edu val PPL ≤ 2.10** (MobileMoE-0.5B class)
 - **HellaSwag ≥ 40%** (vs Pythia-1B at 36%, MobileMoE-0.9B at 38%)
 - **ARC-Challenge ≥ 25%** (vs Pythia-1B at 24%, MobileMoE-0.9B at 26%)
 - **MMLU ≥ 26%** (vs Pythia-1B at 24%, MobileMoE-0.9B at 27%)
 - **GSM8K ≥ 5%** (vs Pythia-1B at 3%, MobileMoE-0.9B at 6%)
 - **HumanEval ≥ 8%** (vs Pythia-1B at 5%, MobileMoE-0.9B at 9%)
 
-If hits all 6 targets, it a publishable result in the MobileMoE-0.9B class with the novel architectural choices (3:1 hybrid, MoE-on-attention-only, NorMuon-with-MoE-exclusion, MTP depth=2, etc.).
+If hits all 6 targets, it a publishable result in the MobileMoE-0.5B class with the novel architectural choices (3:1 hybrid, MoE-on-attention-only, NorMuon-with-MoE-exclusion, MTP depth=2, etc.).
 
 **The evaluation protocol:**
 1. Run each benchmark on the final checkpoint (no fine-tuning, raw pretrained model).
@@ -1096,7 +1096,7 @@ The v1.1 ablation budget is **$1,100-2,700**, separate from the v1.0 primary bud
 
 ### 16.6 Claim 5 and 7: not ablations; part of the primary
 
-Claim 5 (40× params-in-tokens + quality data) is part of the v1.0 primary run by definition — you can't ablate "did the primary use 40× vs 30×" without running both. The 40× vs 30× comparison is implicit in the 30B-token primary val PPL vs the prior 22.5B-token (30×) val PPL reported in the literature, which the design explicitly targets to beat by 0.10-0.20 PPL.
+Claim 5 (~69× params-in-tokens + quality data) is part of the v1.0 primary run by definition — you can't ablate "did the primary use 40× vs 30×" without running both. The 40× vs 30× comparison is implicit in the 30B-token primary val PPL vs the prior 22.5B-token (30×) val PPL reported in the literature, which the design explicitly targets to beat by 0.10-0.20 PPL.
 
 Claim 7 (partial-RoPE + NoPE-hybrid) is also part of the v1.0 primary; an ablation would require a separate run, which is not budgeted in either v1.0 or v1.1. The claim is supported by the literature (SmolLM3 NoPE-every-4th result) and is a relatively safe choice.
 
@@ -1251,7 +1251,7 @@ backward_prefetch = BackwardPrefetch.BACKWARD_PRE
 **Why BF16 reduce (not FP32):**
 
 FSDP-2 gradient reduction can be in BF16 (saves 2× communication) or FP32 (more numerically stable). The NorMuon paper recommends FP32 reduction for stability of the orthogonalization step. We choose **BF16 reduction** because:
-- The 750M scale is small enough that the per-step communication is ~465MB per all-gather, which is dominated by the param all-gather (3.72GB), not the gradient reduce (~465MB).
+- The 750M scale is small enough that the per-step communication is ~283MB per all-gather, which is dominated by the param all-gather (2.28GB), not the gradient reduce (~283MB).
 - BF16 reduction saves 5-10% wall-clock.
 - Numerical stability of the reduction is preserved by the per-parameter grad clipping (1.0) and the cautious weight decay mask.
 
@@ -1326,7 +1326,7 @@ The FSDP-2 communication pattern for one training step:
 2. Backward (per layer, per micro-batch):
 - All-gather full params for layer N (re-shard)
 - Compute backward gradients (BF16)
-- Reduce-scatter gradients to per-rank shards (BF16, ~465MB)
+- Reduce-scatter gradients to per-rank shards (BF16, ~283MB)
 - Discard gathered params
 - Prefetch all-gather for layer N-1 (overlapped)
 
@@ -1338,7 +1338,7 @@ The FSDP-2 communication pattern for one training step:
 
 The two all-gathers per layer (forward + backward) and the reduce-scatter are the communication cost. With 32 layers × 2 all-gathers + 1 reduce-scatter = 96 collective ops per micro-batch, × 4 micro-batches = 384 collective ops per step.
 
-**Per-collective cost:** at 4× A100 SXM with NVLink (600 GB/s bidirectional), a 3.72GB all-gather takes ~6.2ms; a 465MB reduce-scatter takes ~0.8ms. Per micro-batch: 2 × 6.2ms (gather) + 1 × 0.8ms (reduce) = 13.2ms. Per step (4 micro-batches): 53ms of pure communication. Overlapped with compute (forward + backward is ~150-200ms per micro-batch on the 750M model), the 53ms of comm is hidden behind the compute. **Net communication overhead: ~10-15% of wall-clock, as the NorMuon paper reports.**
+**Per-collective cost:** at 4× A100 SXM with NVLink (600 GB/s bidirectional), a 2.28GB all-gather takes ~6.2ms; a 283MB reduce-scatter takes ~0.8ms. Per micro-batch: 2 × 6.2ms (gather) + 1 × 0.8ms (reduce) = 13.2ms. Per step (4 micro-batches): 53ms of pure communication. Overlapped with compute (forward + backward is ~150-200ms per micro-batch on the 434M model), the 53ms of comm is hidden behind the compute. **Net communication overhead: ~10-15% of wall-clock, as the NorMuon paper reports.**
 
 ### 13.5 Gradient norm handling with FSDP-2
 
@@ -1405,7 +1405,7 @@ The full throughput picture for the primary run (750M active, 30B tokens, FSDP-2
 | **With overhead (ckpt, val, data stalls)** | **~5.6 days** | 8.5 sec effective per step |
 | **5-7 day wall-clock target range** | **5.6-7.0 days** | 8.5-10.5 sec effective per step |
 
-The arithmetic shows that with all optimizations (fused GDN + MoE mixed precision + selective `torch.compile` + CUDA graphs on MLA), the 30B-token run on 4× A100 SXM is **5.3 days of pure compute**, expanding to **5-7 days with overhead**. The 5-7 day target is achievable on 4× A100 SXM for a 30B-token run at 750M active with the full optimization stack.
+The arithmetic shows that with all optimizations (fused GDN + MoE mixed precision + selective `torch.compile` + CUDA graphs on MLA), the 30B-token run on 4× A100 SXM is **5.3 days of pure compute**, expanding to **5-7 days with overhead**. The 5-7 day target is achievable on 4× A100 SXM for a 30B-token run at 434M active with the full optimization stack.
 
 **The honest assessment is in §7.6 table:** the 5-7 day target requires the full optimization stack. Removing any of the four (fused GDN, MoE mixed precision, torch.compile, CUDA graphs) extends the wall-clock by 5-25%. Going below 65,000 tok/s sustained (e.g., 50,000 tok/s without fused GDN) extends the wall-clock to ~6.9 days, still within the 5-7 day window. Going below 35,000 tok/s (e.g., no FSDP-2) breaks the 5-7 day budget.
 
@@ -1425,12 +1425,12 @@ The checkpoint every 4,000 steps (every ~8.9 hours at 65,000 tok/s sustained) me
 
 ## 14. Scale variants (700M / 750M / 900M)
 
-The architecture parameterizes cleanly to a family of scales. The base 750M is the primary target; 700M is the floor and 900M is the ceiling of the "publishable" range on the 4× A100 80GB SXM budget at 40× params-in-tokens.
+The architecture parameterizes cleanly to a family of scales. The base 750M is the primary target; 700M is the floor and 900M is the ceiling of the "publishable" range on the 4× A100 80GB SXM budget at ~69× params-in-tokens.
 
 | Variant | Active | Stored | Layers | dim | d_inner | n_experts | Tokens (40×) | Wall-clock @ 65k tok/s | Cost @ $2/hr |
 |---|---|---|---|---|---|---|---|---|---|
 | 700M | 700M | 1.74B | 32 | 832 | 1216 | 16 | 28B | 5.0 days | $960 |
-| **750M (primary)** | **750M** | **1.86B** | **32** | **896** | **1280** | **16** | **30B** | **5.3 days** | **$1,020** |
+| **750M (primary)** | **750M** | **1.13B** | **32** | **896** | **1280** | **16** | **30B** | **5.3 days** | **$1,020** |
 | 900M | 900M | 2.22B | 36 | 960 | 1408 | 16 | 36B | 6.4 days | $1,230 |
 
 With the 4 parallel ablations (each at 7.5B tokens, on a separate pod):
@@ -1456,7 +1456,7 @@ The $2,148 total is the *quality-first* budget. It includes 4 publishable ablati
 
 1. It lands in the middle of the publishable range, giving headroom to go up (900M) or down (700M) for the ablation comparisons.
 2. The dim=896 is a "round" value that makes the partial-RoPE 25% split (= 32 rope_dim) clean.
-3. The 30B token budget fits the modern 40× params-in-tokens practice.
+3. The 30B token budget fits the modern ~69× params-in-tokens practice.
 
 **The architecture is scale-invariant in the following sense:** the per-layer shape (8 MLA + 24 GDN, 16-expert MoE on MLA, 3:1 ratio) is the same across all three variants. Only `dim`, `d_inner`, and the layer count change. This means the paper can report results across the family and claim a scaling-law-style finding for the architectural choices, not just a single data point.
 

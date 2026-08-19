@@ -43,7 +43,7 @@ def pytest_collection_modifyitems(
     """Auto-skip heavy tests unless --run-heavy is specified."""
     if config.getoption("--run-heavy", default=False):
         return
-    skip_heavy = pytest.mark.skip(reason="needs --run-heavy (builds the 1.86B model)")
+    skip_heavy = pytest.mark.skip(reason="needs --run-heavy (builds the 1.13B model)")
     for item in items:
         if "heavy" in item.keywords:
             item.add_marker(skip_heavy)
@@ -55,7 +55,7 @@ def pytest_addoption(parser: pytest.Parser) -> None:
         "--run-heavy",
         action="store_true",
         default=False,
-        help="run tests marked heavy (they build the production 1.86B model)",
+        help="run tests marked heavy (they build the production 1.13B model)",
     )
 
 

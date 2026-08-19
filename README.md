@@ -18,6 +18,8 @@
 
 ## Documentation
 
+**[Hosted docs (GitHub Pages)](https://atandra2000.github.io/HyMo/)** — the full portal with interactive architecture visualizations, KaTeX math, and syntax-highlighted code.
+
 The documentation is organized by how readers use the repository: concepts explain
 why the architecture works, references describe stable APIs and config fields, and
 guides show operational workflows. The full corpus lives under [`docs/`](docs/README.md). Quick links:
@@ -169,7 +171,7 @@ The architecture, training, data, evaluation, and ablation pipelines are fully i
 - **Raw PyTorch first** — no HuggingFace `Trainer`, no Lightning. The loop, kernels, and distributed training are hand-written and deeply optimized (`torch.compile`, FSDP-2).
 - **Strong typing** — every public function is fully annotated; `mypy --strict` is a gate.
 - **No magic numbers** — all hyperparameters live in `configs/hymo_750m.yaml`; code references them via `hymo.core.config`.
-- **No circular dependencies** — `core ← utils ← {models, training, data, eval}`; `models` and `training` share state only through config.
+- **No circular dependencies** — `core ← {models, training, data}`; `models` and `training` share state only through config.
 - **Fully implemented** — no `NotImplementedError` placeholders for core model logic.
 
 ---

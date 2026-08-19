@@ -5,8 +5,6 @@ Contains validation rules that check relationships between different configurati
 
 from __future__ import annotations
 
-import math
-
 from hymo.core.config import HyMoConfig, ModelConfig, TrainingConfig
 
 # Peak budget memory limit per GPU rank (A100 SXM 80GB)

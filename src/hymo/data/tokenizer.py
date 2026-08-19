@@ -32,7 +32,7 @@ def train_bpe_tokenizer(
     """
     tokenizer = Tokenizer(BPE(unk_token="<unk>"))
     tokenizer.pre_tokenizer = pre_tokenizers.ByteLevel(add_prefix_space=True)
-    trainer = BpeTrainer(
+    trainer = BpeTrainer(  # type: ignore[no-untyped-call]
         vocab_size=vocab_size,
         special_tokens=["<unk>", "<s>", "</s>", "<pad>", "<mask>"],
         initial_alphabet=pre_tokenizers.ByteLevel.alphabet(),

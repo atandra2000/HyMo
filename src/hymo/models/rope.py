@@ -17,6 +17,9 @@ __all__ = ["RotaryEmbedding"]
 class RotaryEmbedding(nn.Module):
     """Cached sinusoidal rotations for a configurable head-dimension slice."""
 
+    cos_cached: torch.Tensor
+    sin_cached: torch.Tensor
+
     def __init__(
         self,
         head_dim: int,

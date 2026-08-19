@@ -130,8 +130,9 @@ class DeepSeekMoE(nn.Module):
         # the expert weight dtype so matmuls run in that precision. Under
         # FSDP-BF16 the weights are already BF16 -> dispatch halves the input
         # bandwidth; on CPU (FP32 weights) this is a no-op.
+        first_expert = cast(SwiGLUExpert, self.experts[0])
         x_experts = (
-            x_flat.to(self.experts[0].w1.weight.dtype)
+            x_flat.to(first_expert.w1.weight.dtype)
             if self.use_mixed_precision
             else x_flat
         )

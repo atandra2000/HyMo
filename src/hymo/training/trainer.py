@@ -63,7 +63,7 @@ class Trainer:
 
             import wandb
             cfg_dict = dataclasses.asdict(config) if dataclasses.is_dataclass(config) else {}
-            wandb.init(
+            wandb.init(  # type: ignore[attr-defined]
                 project="HyMo",
                 config=cfg_dict,
                 resume="allow",
@@ -98,7 +98,6 @@ class Trainer:
         standalone default everything on (design intent).
         """
         from hymo.models.gdn import GatedDeltaNetBlock
-        from hymo.models.mla import MLABlock
         from hymo.models.moe import DeepSeekMoE
 
         t = self._config.training
@@ -166,7 +165,7 @@ class Trainer:
             )
 
         scaled_loss = total_loss / self._config.training.gradient_accumulation_steps
-        scaled_loss.backward()
+        scaled_loss.backward()  # type: ignore[no-untyped-call]
 
         self.micro_step += 1
         is_update = (self.micro_step % self._config.training.gradient_accumulation_steps == 0)
@@ -273,7 +272,7 @@ class Trainer:
                     import torch.distributed as dist
                     if self._wandb_enabled and (not dist.is_initialized() or dist.get_rank() == 0):
                         import wandb
-                        wandb.log({
+                        wandb.log({  # type: ignore[attr-defined]
                             "train/loss": result.loss,
                             "train/grad_norm": result.grad_norm,
                             "train/lr_muon": result.lr_muon,
@@ -317,7 +316,7 @@ class Trainer:
         import torch.distributed as dist
         if self._wandb_enabled and (not dist.is_initialized() or dist.get_rank() == 0):
             import wandb
-            wandb.log({
+            wandb.log({  # type: ignore[attr-defined]
                 "val/loss": metrics.loss,
                 "val/ppl": metrics.ppl,
                 "val/batches": metrics.num_batches,

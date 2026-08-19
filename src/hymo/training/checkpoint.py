@@ -126,7 +126,7 @@ def save_checkpoint(
         "optimizer": _optimizer_state_dict(optimizers),
         "scheduler": scheduler.state_dict(),
     }
-    dcp.save(tensor_state, checkpoint_id=str(ckpt_dir))
+    dcp.save(tensor_state, checkpoint_id=str(ckpt_dir))  # type: ignore[attr-defined]
 
     meta: dict[str, Any] = {
         "step": state.step,
@@ -160,7 +160,7 @@ def load_checkpoint(
         "scheduler": scheduler.state_dict(),
     }
     try:
-        dcp.load(tensor_state, checkpoint_id=str(ckpt_dir))
+        dcp.load(tensor_state, checkpoint_id=str(ckpt_dir))  # type: ignore[attr-defined]
     except Exception as e:
         raise RuntimeError(f"Failed to load checkpoint {ckpt_dir}: {e}") from e
 

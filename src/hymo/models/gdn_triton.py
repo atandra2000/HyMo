@@ -20,8 +20,8 @@ import typing
 import torch
 
 try:
-    import triton  # type: ignore[import-not-found]
-    import triton.language as tl  # type: ignore[import-not-found]
+    import triton
+    import triton.language as tl
     HAS_TRITON = True
 except ImportError:
     HAS_TRITON = False
@@ -39,7 +39,7 @@ def _next_power_of_2(n: int) -> int:
 # Marking them as `object` here is purely a mypy hint and is the only way to
 # avoid the "Cannot access global variable Any" NameError on first launch.
 if HAS_TRITON:
-    @triton.jit
+    @triton.jit  # type: ignore[untyped-decorator]
     def gdn_fwd_kernel(  # type: ignore[no-untyped-def]
         v_ptr, b_ptr, c_ptr, g_ptr, A_log_ptr, o_ptr, h_out_ptr,
         stride_vb, stride_vt, stride_vh, stride_vd,
@@ -90,7 +90,7 @@ if HAS_TRITON:
                 h,
             )
 
-    @triton.jit  # type: ignore[misc]
+    @triton.jit  # type: ignore[untyped-decorator]
     def gdn_bwd_kernel(  # type: ignore[no-untyped-def]
         v_ptr, b_ptr, c_ptr, g_ptr, A_log_ptr, h_out_ptr,
         do_ptr,
@@ -278,7 +278,7 @@ def triton_gated_delta_rule(
         f"triton_gated_delta_rule: g must be (B,T,H), got {g_p.shape}"
     )
 
-    out_p = TritonGDNFunction.apply(v_p, b_p, c_p, g_p, A_log_p)
+    out_p = TritonGDNFunction.apply(v_p, b_p, c_p, g_p, A_log_p)  # type: ignore[no-untyped-call]
 
     out = out_p[..., :D]
-    return out.to(v.dtype)
+    return typing.cast(torch.Tensor, out.to(v.dtype))

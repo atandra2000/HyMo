@@ -5,7 +5,7 @@ build-backend = "hatchling.build"
 [project]
 name = "hymo"
 version = "0.1.0"
-description = "HyMo: a 750M-active hybrid GDN+MLA+MoE language model, pre-trained from scratch on 30B tokens."
+description = "HyMo: a 434M-active hybrid GDN+MLA+MoE language model, pre-trained from scratch on 30B tokens."
 readme = "README.md"
 requires-python = ">=3.11"
 license = { text = "Apache-2.0" }
@@ -57,8 +57,8 @@ dev = [
 ]
 
 [project.urls]
-Homepage = "https://github.com/atandra-bharati/hymo"
-Documentation = "https://github.com/atandra-bharati/hymo/tree/main/docs"
+Homepage = "https://github.com/atandra2000/HyMo"
+Documentation = "https://atandra2000.github.io/HyMo/"
 
 # ----------------------------------------------------------------------
 # Build configuration for the src/ layout.
@@ -95,7 +95,7 @@ ignore = [
 "tests/**/*.py" = ["B011"]  # asserts are fine in tests
 
 [tool.mypy]
-python_version = "3.11"
+python_version = "3.12"
 strict = true
 warn_unused_configs = true
 disallow_untyped_defs = true
@@ -109,8 +109,11 @@ mypy_path = "src"
 
 [[tool.mypy.overrides]]
 # Third-party stubs are incomplete, so strict checking is relaxed only for them.
-module = ["torch.*", "datasets.*", "tokenizers.*", "tqdm.*"]
+module = ["torch.*", "datasets.*", "tokenizers.*", "tqdm.*", "triton.*", "wandb.*"]
 ignore_missing_imports = true
+disallow_untyped_calls = false
+disallow_untyped_defs = false
+disallow_untyped_decorators = false
 
 [tool.pytest.ini_options]
 minversion = "8.0"
@@ -126,5 +129,5 @@ markers = [
     "slow: marks tests as slow (deselect with '-m \"not slow\"')",
     "gpu: marks tests that require a GPU (deselect on CPU-only machines)",
     "integration: marks integration tests that touch multiple modules",
-    "heavy: marks tests that build the production HyMo model (1.86 B params; runs on CI / GPU pod, not on M1 Air)",
+    "heavy: marks tests that build the production HyMo model (~1.13 B params stored / ~434 M active; runs on CI / GPU pod, not on M1 Air)",
 ]

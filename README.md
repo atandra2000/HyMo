@@ -103,7 +103,7 @@ print(logits.shape)  # (2, 128, 64256)
 ```
 
 ```bash
-pytest tests/ -v                # ~1 min on CPU; heavy tests skipped (191 passed / 35 skipped as of 2026-08-05)
+pytest tests/ -v                # ~1 min on CPU; heavy tests skipped (203 passed / 35 skipped (GPU-gated) as of 2026-08-20)
 pytest tests/ --run-heavy       # includes full 1.13B model construction
 mypy src/hymo                   # type gate
 ruff check src/hymo             # lint gate

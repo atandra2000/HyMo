@@ -30,6 +30,30 @@ guides show operational workflows. The full corpus lives under [`docs/`](docs/RE
 - [`docs/references/config.md`](docs/references/config.md) — the typed-config reference
 - [`docs/training.md`](docs/training.md) — the training pipeline
 
+---
+
+## 🗺️ Visual Architecture Atlas
+
+> Explore the full **[Interactive Visual Systems Guide](docs/diagrams/hymo_interactive_guide.html)**: four verified Archify showcase maps, live 3:1 GDN:MLA decode memory calculator, delta-rule recurrence simulator, and [verification receipts](docs/diagrams/RECEIPTS.md).
+
+<div align="center">
+  <a href="docs/diagrams/hymo_interactive_guide.html">
+    <img src="docs/diagrams/hymo-architecture.visual-check.1440x900.dark.png" alt="HyMo Architecture Overview" width="100%" style="border-radius: 8px; box-shadow: 0 4px 20px rgba(0,0,0,0.3);" />
+  </a>
+  <p><em>Figure 1: HyMo Hybrid Architecture Map — 32-layer stack with 3:1 Gated Delta Net (linear attention) to Multi-Head Latent Attention (full attention) ratio and asymmetric MoE. Click image to open interactive guide.</em></p>
+</div>
+
+### Interactive Architecture & Systems Diagrams
+
+| Diagram | Description | Interactive HTML | Visual Preview |
+|---|---|:---:|:---:|
+| **Hybrid Architecture** | 32-layer topology (24 GDN + 8 MLA), asymmetric MoE routing (16 routed + 1 shared), partial RoPE, and 2-head MTP | [Open Map ↗](docs/diagrams/hymo-architecture.html) | [PNG](docs/diagrams/hymo-architecture.visual-check.1440x900.dark.png) |
+| **Systems & Kernels Stack** | Custom Triton GDN fused 1D selective scan, NorMuon/AdamW dual optimizer, FSDP sharding, and A100 VRAM budget | [Open Map ↗](docs/diagrams/hymo-optimizations.html) | [PNG](docs/diagrams/hymo-optimizations.visual-check.1440x900.dark.png) |
+| **30B-Token Data Pipeline** | FineWeb-Edu streaming, BPE-64k + byte fallback tokenizer, deterministic shard chunking, and memory-mapped dataloader | [Open Map ↗](docs/diagrams/hymo-dataflow.html) | [PNG](docs/diagrams/hymo-dataflow.visual-check.1440x900.dark.png) |
+| **Pretraining Workflow** | 30B-token pretraining loop, NorMuon/AdamW step synchronization, logit softcapping (15.0), and validation harness | [Open Map ↗](docs/diagrams/hymo-training.html) | [PNG](docs/diagrams/hymo-training.visual-check.1440x900.dark.png) |
+
+---
+
 ## Why HyMo
 
 Transformer attention scales quadratically with sequence length — the dominant cost of pretraining at scale. **HyMo is a hybrid**: it processes the bulk of the sequence through *linear-complexity* recurrence (Gated Delta Net) and reserves sparse *full-attention* anchors for genuine long-range reasoning. The result is a model that trains and infers far cheaper than an all-attention transformer of equal quality, while keeping the expressivity where it matters.

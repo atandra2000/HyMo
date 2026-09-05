@@ -1,0 +1,87 @@
+{
+  "schema_version": 1,
+  "diagram_type": "architecture",
+  "meta": {
+    "title": "HyMo 32-Layer Hybrid Model Architecture (3:1 GDN:MLA)",
+    "quality_profile": "showcase",
+    "views": [
+      {
+        "id": "forward-path",
+        "label": "Forward Path",
+        "focus": ["tokens", "embed", "gdn", "mla", "moe", "head", "logits"],
+        "note": "Token stream passes through 32 hybrid layers (24 GDN + 8 MLA) and Asymmetric MoE to logits."
+      },
+      {
+        "id": "recurrent-state",
+        "label": "GDN Recurrence",
+        "focus": ["gdn", "gdn_state", "triton_kernel"],
+        "note": "24 GDN layers maintain constant O(1) state memory via Triton-accelerated gated delta rule."
+      },
+      {
+        "id": "mtp-supervision",
+        "label": "MTP Multi-Token Heads",
+        "focus": ["head", "mtp1", "mtp2"],
+        "note": "Depth-2 MTP heads predict future tokens t+1 and t+2 for training densification and speculative decode."
+      }
+    ]
+  },
+  "components": [
+    { "id": "tokens", "type": "external", "label": "Token Stream", "sublabel": "vocab 32,000", "pos": [40, 150], "size": [140, 70] },
+    { "id": "embed", "type": "backend", "label": "Token Embedding", "sublabel": "1536-dim · tied", "pos": [220, 150], "size": [140, 70] },
+    { "id": "gdn", "type": "backend", "label": "24× GDN Blocks", "sublabel": "linear recurrence", "tag": "3:1 ratio", "pos": [400, 150], "size": [150, 70] },
+    { "id": "mla", "type": "backend", "label": "8× MLA Blocks", "sublabel": "d_c=512 · partial RoPE", "pos": [590, 150], "size": [150, 70] },
+    { "id": "moe", "type": "backend", "label": "DeepSeekMoE", "sublabel": "1 shared + 8 routed", "tag": "top-2", "pos": [780, 150], "size": [150, 70] },
+    { "id": "head", "type": "backend", "label": "RMSNorm + Head", "sublabel": "weight-tied", "pos": [970, 150], "size": [150, 70] },
+    { "id": "logits", "type": "external", "label": "Logits (y_t)", "sublabel": "(B, S, 32000)", "pos": [1160, 150], "size": [130, 70] },
+
+    { "id": "gdn_state", "type": "database", "label": "GDN Recurrent State", "sublabel": "O(1) decode memory", "pos": [310, 360], "size": [170, 80] },
+    { "id": "triton_kernel", "type": "cloud", "label": "Custom Triton Kernel", "sublabel": "chunked delta GEMM", "pos": [520, 360], "size": [170, 80] },
+    { "id": "mtp1", "type": "backend", "label": "MTP Head 1 (t+1)", "sublabel": "depth 1 · loss 0.3", "pos": [870, 360], "size": [160, 80] },
+    { "id": "mtp2", "type": "backend", "label": "MTP Head 2 (t+2)", "sublabel": "depth 2 · loss 0.15", "pos": [1070, 360], "size": [160, 80] }
+  ],
+  "boundaries": [
+    { "label": "32-Layer Hybrid Backbone (src/hymo/models/model.py)", "kind": "region", "wraps": ["embed", "gdn", "mla", "moe", "head"] },
+    { "label": "Multi-Token Prediction Supervision (src/hymo/models/mtp.py)", "kind": "region", "wraps": ["mtp1", "mtp2"] }
+  ],
+  "connections": [
+    { "id": "c-tok-embed", "from": "tokens", "to": "embed", "label": "input ids", "labelAt": [200, 234] },
+    { "id": "c-embed-gdn", "from": "embed", "to": "gdn", "label": "h (B,T,1536)", "labelAt": [380, 234] },
+    { "id": "c-gdn-mla", "from": "gdn", "to": "mla", "label": "linear states", "labelAt": [570, 234], "variant": "emphasis" },
+    { "id": "c-mla-moe", "from": "mla", "to": "moe", "label": "softmax context", "labelAt": [760, 234] },
+    { "id": "c-moe-head", "from": "moe", "to": "head", "label": "hidden output", "labelAt": [950, 234] },
+    { "id": "c-head-logits", "from": "head", "to": "logits", "label": "next-token", "labelAt": [1140, 234] },
+    { "id": "c-gdn-state", "from": "gdn", "to": "gdn_state", "fromSide": "bottom", "toSide": "top", "label": "state update", "variant": "dashed" },
+    { "id": "c-state-triton", "from": "gdn_state", "to": "triton_kernel", "fromSide": "right", "toSide": "left", "label": "chunked GEMM", "labelAt": [500, 454] },
+    { "id": "c-head-mtp1", "from": "head", "to": "mtp1", "fromSide": "bottom", "toSide": "top", "label": "shared embed", "variant": "dashed" },
+    { "id": "c-mtp1-mtp2", "from": "mtp1", "to": "mtp2", "fromSide": "right", "toSide": "left", "label": "depth-2 rollout", "labelAt": [1050, 454], "variant": "emphasis" }
+  ],
+  "cards": [
+    {
+      "title": "3:1 GDN:MLA Hybrid Ratio",
+      "dot": "cyan",
+      "items": [
+        "24 Gated Delta Net layers provide linear O(N) training and O(1) decode memory",
+        "8 Multi-Head Latent Attention layers maintain high-fidelity retrieval across long context",
+        "NoPE in GDN layers avoids positional distortion; partial RoPE applied in MLA blocks"
+      ]
+    },
+    {
+      "title": "Asymmetric DeepSeekMoE",
+      "dot": "emerald",
+      "items": [
+        "1 shared expert isolates universal knowledge while 8 routed experts specialize",
+        "Top-2 routing activates 434M active parameters per token from 1.13B stored",
+        "Auxiliary-loss-free dynamic bias correction balances expert loads without gradient noise"
+      ]
+    },
+    {
+      "title": "Depth-2 Multi-Token Prediction",
+      "dot": "violet",
+      "items": [
+        "Simultaneously predicts tokens t+1 and t+2 to enrich training supervision",
+        "Enables 2-token speculative decoding verification with zero extra inference parameters",
+        "Tied embedding and LM head reduces total model parameter footprint"
+      ]
+    }
+  ]
+}

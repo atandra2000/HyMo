@@ -1,0 +1,94 @@
+{
+  "schemaVersion": 1,
+  "scope": "HyMo Archify visual documentation and portal integration",
+  "diagrams": [
+    {
+      "name": "hymo-architecture",
+      "type": "architecture",
+      "output": "hymo-architecture.html",
+      "spec_file": "hymo-architecture.architecture.json",
+      "spec_sha256": "9e6d1ed0a4f922dcd64602e750fce79be6fbfc43a8ce0016aa88bdd9f351385b",
+      "spec_bytes": 5341,
+      "artifact_sha256": "512126a52a089e2c3b5d53972281ea96d85cfc7b26eddd3a66699b8608f83e92",
+      "artifact_bytes": 719174,
+      "validation": {
+        "checksPassed": 9,
+        "checkCount": 9,
+        "compositionProfile": "showcase",
+        "compositionStatus": "pass",
+        "errors": 0,
+        "warnings": 0
+      },
+      "browser_evidence": "passed",
+      "browser_receipt": "hymo-architecture.visual-check.json",
+      "visual_review": "passed",
+      "correction_rounds": 0
+    },
+    {
+      "name": "hymo-dataflow",
+      "type": "dataflow",
+      "output": "hymo-dataflow.html",
+      "spec_file": "hymo-dataflow.dataflow.json",
+      "spec_sha256": "772158a0131e23f52114c1de89e85f5a781cab755c3b40dc15ce5374d81c3d02",
+      "spec_bytes": 4750,
+      "artifact_sha256": "a348b407f79eb2d56c463f175c2247f9458d2d2f447b910455f6bd0257f6a006",
+      "artifact_bytes": 714119,
+      "validation": {
+        "checksPassed": 9,
+        "checkCount": 9,
+        "compositionProfile": "showcase",
+        "compositionStatus": "pass",
+        "errors": 0,
+        "warnings": 0
+      },
+      "browser_evidence": "passed",
+      "browser_receipt": "hymo-dataflow.visual-check.json",
+      "visual_review": "passed",
+      "correction_rounds": 0
+    },
+    {
+      "name": "hymo-training",
+      "type": "workflow",
+      "output": "hymo-training.html",
+      "spec_file": "hymo-training.workflow.json",
+      "spec_sha256": "8867fa8df7479323ed36e05d8c1ec36f4d5d3c63512b1d47b4aaea5a5415d59e",
+      "spec_bytes": 4877,
+      "artifact_sha256": "fc79c8669943a784276aa97f0306d94fc9d1023ce7626ee824c8aca07b33b388",
+      "artifact_bytes": 715121,
+      "validation": {
+        "checksPassed": 9,
+        "checkCount": 9,
+        "compositionProfile": "showcase",
+        "compositionStatus": "pass",
+        "errors": 0,
+        "warnings": 0
+      },
+      "browser_evidence": "passed",
+      "browser_receipt": "hymo-training.visual-check.json",
+      "visual_review": "passed",
+      "correction_rounds": 0
+    },
+    {
+      "name": "hymo-optimizations",
+      "type": "architecture",
+      "output": "hymo-optimizations.html",
+      "spec_file": "hymo-optimizations.architecture.json",
+      "spec_sha256": "71f61b92a895b3390850658932260ed9a3c25cfa263a55ee13fdf5079f90411e",
+      "spec_bytes": 4700,
+      "artifact_sha256": "c8fa7c5ba29170ffcc4a9216da3d866bd1c6fab414ffaa37bda4cbc35076abd3",
+      "artifact_bytes": 716277,
+      "validation": {
+        "checksPassed": 9,
+        "checkCount": 9,
+        "compositionProfile": "showcase",
+        "compositionStatus": "pass",
+        "errors": 0,
+        "warnings": 0
+      },
+      "browser_evidence": "passed",
+      "browser_receipt": "hymo-optimizations.visual-check.json",
+      "visual_review": "passed",
+      "correction_rounds": 0
+    }
+  ]
+}

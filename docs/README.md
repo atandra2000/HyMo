@@ -5,6 +5,10 @@
 > canonical layout is `concepts/` for theory, `references/` for APIs/config,
 > `guides/` for workflows, and `training.md` for the end-to-end loop.
 
+## Visual Systems Atlas
+
+Explore the [Interactive Visual Systems Guide](diagrams/hymo_interactive_guide.html): four verified Archify showcase maps ([32-Layer Hybrid Architecture](diagrams/hymo-architecture.html), [30B-Token Data Pipeline](diagrams/hymo-dataflow.html), [Pretraining Workflow](diagrams/hymo-training.html), [Systems & Kernels Stack](diagrams/hymo-optimizations.html)), interactive 3:1 GDN:MLA decode memory calculator, delta-rule recurrence simulator, and [verification receipts](diagrams/RECEIPTS.md).
+
 **Audience:** the author (interview preparation + self-mastery), with a motivated reader who has linear algebra + calculus but no transformer background as the secondary audience. Docs are **concept-first, code-anchored, formula-driven**; no hand-waving, no fabricated paths.
 
 **Source of truth:** the code in `src/hymo/` at the HEAD commit. When the code changes a fact a doc cites, the doc is updated in the same commit (no stale doc commits).

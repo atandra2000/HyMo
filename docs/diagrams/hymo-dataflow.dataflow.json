@@ -1,0 +1,86 @@
+{
+  "schema_version": 1,
+  "diagram_type": "dataflow",
+  "meta": {
+    "title": "HyMo Data Pipeline — 30B-Token Multi-Source Sharding",
+    "quality_profile": "showcase",
+    "viewBox": [1080, 430],
+    "views": [
+      {
+        "id": "full-pipeline",
+        "label": "Full Pipeline",
+        "focus": ["fineweb", "stack", "math", "raw", "clean", "tok", "shards", "pretrain"],
+        "note": "Complete pipeline from 30B-token multi-source web, code, and math corpus to packed uint32 shards and training loader."
+      },
+      {
+        "id": "sources",
+        "label": "Corpus Mixture",
+        "focus": ["fineweb", "stack", "math", "raw"],
+        "note": "Strict per-source quotas: 60% FineWeb-Edu (18B), 20% The Stack v2 (6B), 20% Math/ArXiv (6B)."
+      },
+      {
+        "id": "mtp-windowing",
+        "label": "MTP Multi-Token Packing",
+        "focus": ["shards", "pretrain"],
+        "note": "PretrainDataset memory-maps binary shards and windows S+2 tokens to support depth-2 MTP targets."
+      }
+    ]
+  },
+  "stages": [
+    { "label": "Sources (configs/hymo_mixture.yaml)" },
+    { "label": "1 · Stream & Ingest" },
+    { "label": "2 · Deduplicate & Clean" },
+    { "label": "3 · Tokenize" },
+    { "label": "4 · Pack & Consume" }
+  ],
+  "nodes": [
+    { "id": "fineweb", "type": "external", "label": "FineWeb-Edu", "sublabel": "w 0.60 · 18.0B tok", "tag": "web prose", "stage": 0, "row": 0, "width": 150, "height": 48 },
+    { "id": "stack", "type": "external", "label": "The Stack v2", "sublabel": "Python · w 0.20 · 6.0B", "tag": "code", "stage": 0, "row": 1, "width": 150, "height": 48 },
+    { "id": "math", "type": "external", "label": "OpenWebMath + ArXiv", "sublabel": "w 0.20 · 6.0B tok", "tag": "math + papers", "stage": 0, "row": 1, "yOffset": 58, "width": 150, "height": 48 },
+
+    { "id": "raw", "type": "database", "label": "data/raw/<src>/", "sublabel": "compressed JSONL", "stage": 1, "row": 1, "width": 150, "height": 48 },
+    { "id": "clean", "type": "backend", "label": "Clean & Filter", "sublabel": "MinHash + exact dedup", "tag": "per-source", "stage": 2, "row": 1, "width": 150, "height": 48 },
+    { "id": "tok", "type": "backend", "label": "Tiktoken Tokenize", "sublabel": "vocab 32,000 · EOS append", "tag": "uint32 stream", "stage": 3, "row": 1, "width": 150, "height": 48 },
+
+    { "id": "shards", "type": "database", "label": "shard_*.bin", "sublabel": "600 × 50M uint32 · 120GB", "tag": "round-robin packed", "stage": 4, "row": 0, "width": 150, "height": 48 },
+    { "id": "pretrain", "type": "backend", "label": "HyMo PretrainDataset", "sublabel": "mmap windows (S+2 tokens)", "tag": "x_t, y_t, y_t+1, y_t+2", "stage": 4, "row": 1, "width": 150, "height": 48 }
+  ],
+  "flows": [
+    { "id": "f-fineweb-raw", "from": "fineweb", "to": "raw", "label": "18.0B tok", "labelAt": [172, 200], "variant": "emphasis" },
+    { "id": "f-stack-raw", "from": "stack", "to": "raw", "label": "6.0B tok", "labelAt": [172, 362] },
+    { "id": "f-math-raw", "from": "math", "to": "raw", "label": "6.0B tok", "labelAt": [172, 429] },
+    { "id": "f-raw-clean", "from": "raw", "to": "clean", "label": "raw stream", "labelDy": -24, "variant": "emphasis" },
+    { "id": "f-clean-tok", "from": "clean", "to": "tok", "label": "deduped text", "labelDy": -24, "variant": "emphasis" },
+    { "id": "f-tok-shards", "from": "tok", "to": "shards", "label": "uint32 token arrays", "labelAt": [770, 172], "variant": "emphasis" },
+    { "id": "f-shards-pretrain", "from": "shards", "to": "pretrain", "fromSide": "bottom", "toSide": "top", "route": "straight", "label": "mmap windows S+2", "labelAt": [960, 216], "labelDy": 45, "variant": "emphasis" }
+  ],
+  "cards": [
+    {
+      "title": "30B Token Mixture Strategy",
+      "dot": "cyan",
+      "items": [
+        "Curated for Chinchilla-optimal pretraining of the 1.13B-stored parameter model",
+        "60% FineWeb-Edu for high-grade syntactic reasoning and factual density",
+        "20% The Stack v2 (Python) and 20% Math/ArXiv for structural logic"
+      ]
+    },
+    {
+      "title": "Binary Shard Architecture",
+      "dot": "emerald",
+      "items": [
+        "Fixed 50M-token binary chunks stored as raw uint32 arrays (120 GB total on disk)",
+        "Zero-copy np.memmap access with negligible RAM footprint during training",
+        "Resumable deterministic shuffle maintains training reproducibility"
+      ]
+    },
+    {
+      "title": "MTP Multi-Token Alignment",
+      "dot": "amber",
+      "items": [
+        "Dataset extracts windows of S+2 contiguous tokens: input x = chunk[:S]",
+        "Primary target y_0 = chunk[1:S+1], depth-1 target y_1 = chunk[2:S+2]",
+        "Zero token padding: non-full shard tails are cleanly dropped"
+      ]
+    }
+  ]
+}

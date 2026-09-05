@@ -1,0 +1,92 @@
+{
+  "schema_version": 2,
+  "diagram_type": "workflow",
+  "meta": {
+    "title": "HyMo Pretraining Pipeline — training/trainer.py",
+    "quality_profile": "showcase",
+    "legend": { "mode": "hidden" },
+    "views": [
+      {
+        "id": "main-step",
+        "label": "Training Step",
+        "focus": ["yaml", "init", "loader", "fwd", "loss", "bwd", "clip", "optim"],
+        "note": "Main training path: FSDP-2 hybrid forward, multi-token loss rollout, and NorMuon/AdamW step."
+      },
+      {
+        "id": "fault-safety",
+        "label": "Fault Safety",
+        "focus": ["fwd", "nan", "rollback", "ckpt"],
+        "note": "NaN guard detects loss divergence; 5 consecutive failures roll back to last atomic checkpoint."
+      },
+      {
+        "id": "optimizer-cadence",
+        "label": "Optimizer Cadence",
+        "focus": ["optim", "bias", "ckpt"],
+        "note": "NorMuon on 2D matrices + AdamW on vectors, paired with out-of-band MoE dynamic bias updates."
+      }
+    ]
+  },
+  "lanes": [
+    { "id": "setup", "label": "Setup & Update" },
+    { "id": "micro", "label": "Training Step (Accumulation)" },
+    { "id": "guard", "label": "Fault Tolerance", "variant": "exception" }
+  ],
+  "mainPath": ["yaml", "init", "loader", "fwd", "loss", "bwd", "clip", "optim"],
+  "nodes": [
+    { "id": "yaml", "type": "external", "label": "pretrain YAML", "sublabel": "A100 FSDP-2", "lane": "setup", "col": 0, "width": 116, "height": 46 },
+    { "id": "init", "type": "backend", "label": "build_hymo()", "sublabel": "FSDP-2 · NorMuon", "lane": "setup", "col": 1, "width": 116, "height": 46 },
+    { "id": "loader", "type": "messagebus", "label": "DataLoader", "sublabel": "uint32 shards", "lane": "micro", "col": 1, "width": 116, "height": 46 },
+    { "id": "fwd", "type": "backend", "label": "Hybrid Forward", "sublabel": "GDN + MLA + MoE", "lane": "micro", "col": 2, "width": 116, "height": 46 },
+    { "id": "loss", "type": "backend", "label": "Composite Loss", "sublabel": "CE + 0.3·MTP", "lane": "micro", "col": 3, "width": 116, "height": 46 },
+    { "id": "bwd", "type": "backend", "label": "backward()", "sublabel": "FP32 grad accum", "lane": "micro", "col": 4, "width": 116, "height": 46 },
+    { "id": "clip", "type": "backend", "label": "Grad Clip", "sublabel": "norm ≤ 1.0", "lane": "micro", "col": 5, "width": 116, "height": 46 },
+    { "id": "optim", "type": "backend", "label": "Optimizer Step", "sublabel": "NorMuon + AdamW", "lane": "setup", "col": 5, "width": 116, "height": 46 },
+
+    { "id": "bias", "type": "messagebus", "label": "MoE Bias Update", "sublabel": "dynamic steering", "lane": "setup", "col": 4, "width": 116, "height": 46 },
+    { "id": "nan", "type": "security", "label": "Loss Guard", "sublabel": "finite check", "lane": "guard", "col": 2, "width": 116, "height": 46 },
+    { "id": "rollback", "type": "security", "label": "Rollback", "sublabel": "restore state", "lane": "guard", "col": 3, "width": 116, "height": 46 },
+    { "id": "ckpt", "type": "database", "label": "Safetensors", "sublabel": "atomic checkpoint", "lane": "guard", "col": 5, "width": 116, "height": 46 }
+  ],
+  "edges": [
+    { "id": "e-yaml-init", "from": "yaml", "to": "init", "variant": "emphasis" },
+    { "id": "e-init-loader", "from": "init", "to": "loader" },
+    { "id": "e-loader-fwd", "from": "loader", "to": "fwd", "label": "(B,S+2)" },
+    { "id": "e-fwd-loss", "from": "fwd", "to": "loss", "label": "logits", "variant": "emphasis" },
+    { "id": "e-loss-bwd", "from": "loss", "to": "bwd" },
+    { "id": "e-bwd-clip", "from": "bwd", "to": "clip", "variant": "emphasis" },
+    { "id": "e-clip-optim", "from": "clip", "to": "optim" },
+
+    { "id": "e-fwd-nan", "from": "fwd", "to": "nan", "role": "error", "variant": "security" },
+    { "id": "e-nan-bwd", "from": "nan", "to": "bwd", "label": "finite", "role": "return" },
+    { "id": "e-nan-rollback", "from": "nan", "to": "rollback", "label": "streak ≥ 5", "role": "error", "variant": "security" },
+
+    { "id": "e-optim-bias", "from": "optim", "to": "bias", "variant": "dashed" },
+    { "id": "e-optim-ckpt", "from": "optim", "to": "ckpt", "variant": "dashed" }
+  ],
+  "cards": [
+    {
+      "title": "Dual Optimizer Partition",
+      "dot": "cyan",
+      "items": [
+        "NorMuon updates 2D weight matrices via Newton-Schulz iteration",
+        "AdamW handles 1D vectors and embeddings with WSD schedule"
+      ]
+    },
+    {
+      "title": "Composite MTP Loss",
+      "dot": "emerald",
+      "items": [
+        "Joint loss = CrossEntropy(y_t) + 0.3·MTP_1 + 0.15·MTP_2",
+        "Chunked cross-entropy prevents intermediate VRAM spikes"
+      ]
+    },
+    {
+      "title": "Divergence Guard",
+      "dot": "rose",
+      "items": [
+        "Finite loss guard checks every micro-step before backward pass",
+        "Atomic safetensors checkpointing with bitwise-exact resume"
+      ]
+    }
+  ]
+}

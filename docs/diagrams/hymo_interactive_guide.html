@@ -3,7 +3,7 @@
 <head>
 <meta charset="utf-8">
 <meta name="viewport" content="width=device-width, initial-scale=1">
-<title>HyMo — Interactive Systems & Architecture Guide</title>
+<title>HyMo Visual Guide</title>
 <style>
 :root{color-scheme:light dark;--bg:#f6f5f0;--paper:#ffffff;--ink:#142328;--muted:#53666d;--line:#d5ded9;--accent:#087f8c;--soft:#e5f4f6;--code-bg:#ebf5f7}
 @media(prefers-color-scheme:dark){:root{--bg:#0e191c;--paper:#162428;--ink:#e3eeeb;--muted:#a3b8b6;--line:#2e4449;--accent:#6fe3f2;--soft:#18363c;--code-bg:#1a2f34}}
@@ -45,114 +45,4 @@ code{font-family:ui-monospace,monospace;font-size:13px;background:var(--code-bg)
 footer{border-top:1px solid var(--line);margin-top:60px;font-size:14px;color:var(--muted)}
 </style>
 </head>
-<body>
-
-<header>
-  <div class="eyebrow">Interactive Visual Systems Guide</div>
-  <h1>HyMo</h1>
-  <p class="lead">
-    A configured 32-layer hybrid language model combining Gated Delta Networks (24 linear attention layers) with Multi-Head Latent Attention (8 full attention layers), Asymmetric Mixture-of-Experts, and NorMuon matrix optimization. The training schedule targets approximately 30B tokens of exposure, not a measured completed run.
-  </p>
-  <div class="pill-bar">
-    <div class="pill">Width: <strong>896 configured</strong></div>
-    <div class="pill">Vocabulary: <strong>64,256 configured</strong></div>
-    <div class="pill">Hybrid Ratio: <strong>3:1 (24 GDN : 8 MLA)</strong></div>
-    <div class="pill">MoE: <strong>1 Shared + 16 Routed (Top-2)</strong></div>
-    <div class="pill">Optimizers: <strong>NorMuon + AdamW partition</strong></div>
-  </div>
-  <nav class="jump-nav">
-    <a href="#diagrams">Architecture Maps</a>
-    <a href="#hybrid-calc">Decode Memory</a>
-    <a href="#delta-sim">Recurrence</a>
-    <a href="#specs">System Specs</a>
-    <a href="#receipts">Verification Evidence</a>
-  </nav>
-</header>
-
-<main>
-  <section id="diagrams">
-    <div class="eyebrow">Standalone Showcase Deliverables</div>
-    <h2>Architecture & Workflow Maps</h2>
-    <p>Four source-corrected diagrams. Deterministic and browser evidence are recorded separately below. Perceptual review and the proposed typography target remain pending.</p>
-
-    <div class="grid-2">
-      <div class="card">
-        <h3>Model Architecture <span>🏛️</span></h3>
-        <p>Complete 32-layer hybrid topology: 24 Gated Delta Net blocks (RoPE enabled in this config), 8 Multi-Head Latent Attention blocks, Asymmetric DeepSeekMoE, and depth-2 MTP heads.</p>
-        <code>docs/diagrams/hymo-architecture.html</code>
-        <br>
-        <a class="card-btn" href="hymo-architecture.html">Open Diagram ↗</a>
-      </div>
-
-      <div class="card">
-        <h3>Data Preparation and Handoff <span>⚡</span></h3>
-        <p>Seven-source shared recipe with an 8B-token preparation budget. The HyMo tokenizer and caller-owned training adapter are separate boundaries, not a verified S+2 shard loader.</p>
-        <code>docs/diagrams/hymo-dataflow.html</code>
-        <br>
-        <a class="card-btn" href="hymo-dataflow.html">Open Diagram ↗</a>
-      </div>
-
-      <div class="card">
-        <h3>Training Workflow & MTP Loop <span>🔄</span></h3>
-        <p>End-to-end distributed pretraining loop: FSDP-2 forward pass, composite multi-token loss ($L_{main} + 0.3 L_{mtp1} + 0.1 L_{mtp2}$), NorMuon/AdamW step, and divergence safety net.</p>
-        <code>docs/diagrams/hymo-training.html</code>
-        <br>
-        <a class="card-btn" href="hymo-training.html">Open Diagram ↗</a>
-      </div>
-
-      <div class="card">
-        <h3>Systems & Optimization Stack <span>🚀</span></h3>
-        <p>Kernel execution topology: Hand-crafted Triton GDN chunked recurrence kernel, PyTorch 2.5 SDPA FlashAttention-2, FSDP-2 sharding, and Newton-Schulz matrix momentum.</p>
-        <code>docs/diagrams/hymo-optimizations.html</code>
-        <br>
-        <a class="card-btn" href="hymo-optimizations.html">Open Diagram ↗</a>
-      </div>
-    </div>
-  </section>
-
-  <section id="hybrid-calc"><h2>Decode-memory evidence boundary</h2><p>The former calculator treated a hypothetical compressed cache as implemented allocation. Current MLA expands grouped K/V before SDPA. No physical decode-memory benchmark or cache-saving ratio is claimed here.</p></section>
-  <section id="delta-sim"><h2>Recurrence evidence boundary</h2><p>The former scalar animation did not simulate the implemented recurrence and has been removed. See <code>src/hymo/models/gdn.py:GatedDeltaNetBlock._gated_delta_rule</code> for the FP32 state update. Triton speedup requires a separate GPU benchmark.</p></section>
-  <section id="specs">
-    <div class="eyebrow">Architecture Specifications</div>
-    <h2>HyMo Technical Parameters</h2>
-    <table>
-      <thead>
-        <tr><th>Module</th><th>Configuration</th><th>Symbol Citation</th></tr>
-      </thead>
-      <tbody>
-        <tr><td><strong>Backbone</strong></td><td>32 layers (24 GDN + 8 MLA), d_model=896</td><td><code>src/hymo/models/model.py:HyMo</code></td></tr>
-        <tr><td><strong>Gated Delta Net (GDN)</strong></td><td>24 layers, delta rule recurrence, RoPE-enabled recurrence</td><td><code>src/hymo/models/gdn.py:GatedDeltaNetBlock</code></td></tr>
-        <tr><td><strong>Triton Recurrence Kernel</strong></td><td>Conditional CUDA Triton recurrence, not SRAM-only execution</td><td><code>src/hymo/models/gdn_triton.py:triton_gated_delta_rule</code></td></tr>
-        <tr><td><strong>MLA Layers</strong></td><td>8 layers, latent KV dim d_c=128, MQA-4, partial RoPE</td><td><code>src/hymo/models/mla.py:MultiHeadLatentAttention</code></td></tr>
-        <tr><td><strong>DeepSeekMoE</strong></td><td>1 shared + 16 routed experts (top-2 active), aux-loss-free</td><td><code>src/hymo/models/moe.py:DeepSeekMoE</code></td></tr>
-        <tr><td><strong>MTP Heads</strong></td><td>Depth-2 auxiliary prediction heads (loss weights 0.3, 0.1)</td><td><code>src/hymo/models/mtp.py:MultiTokenPrediction</code></td></tr>
-        <tr><td><strong>Dual Optimizer</strong></td><td>NorMuon on remaining dense 2D matrices. AdamW on experts, embeddings/head, gates, norms, scalars and non-2D weights</td><td><code>src/hymo/training/optimizer.py:build_optimizers</code></td></tr>
-      </tbody>
-    </table>
-  </section>
-
-  <section id="receipts">
-    <div class="eyebrow">Verification Evidence</div>
-    <h2>Delivery Receipts & Artifact Hashes</h2>
-    <p>All delivered HTML artifacts are verified with SHA-256 bindings. For details see <a href="RECEIPTS.md">RECEIPTS.md</a> and <a href="hymo_receipts.json">hymo_receipts.json</a>.</p>
-    <table>
-      <thead>
-        <tr><th>Artifact</th><th>Type</th><th>SHA-256 Hash</th><th>Byte Size</th></tr>
-      </thead>
-      <tbody>
-        <tr><td><code>hymo-architecture.html</code></td><td>architecture</td><td><code>f9be95cc496ab4141a576fa8ca9895d7617b834d83649fc35bd9ed49da0eab37</code></td><td>709,335 B</td></tr>
-        <tr><td><code>hymo-dataflow.html</code></td><td>dataflow</td><td><code>c6716875c6a94fd74527c7e51e68fdfd5a681aa99c1dd103cf441ae7f09353f1</code></td><td>713,995 B</td></tr>
-        <tr><td><code>hymo-training.html</code></td><td>workflow</td><td><code>2da893beb41e01838e57735ddd5108f0c308bf1f44030bcef34d5bcbad2f27f7</code></td><td>718,786 B</td></tr>
-        <tr><td><code>hymo-optimizations.html</code></td><td>architecture</td><td><code>cafa21f47bab71fced609849f1c30f26563f6ac15431d549d7f17b17f073befc</code></td><td>715,338 B</td></tr>
-      </tbody>
-    </table>
-  </section>
-</main>
-
-<footer>
-  <p>HyMo Illustrated Systems Guide · Source-corrected Archify documentation · Source-anchored to PyTorch repository.</p>
-</footer>
-
-
-</body>
-</html>
+<body><header><div class="eyebrow">Source-grounded visual guide</div><h1>HyMo</h1><nav class="jump-nav" aria-label="Guide sections"><a href="#overview">Overview</a><a href="#model">Model</a><a href="#data">Data</a><a href="#training">Training</a><a href="#mechanism">Optimizations</a><a href="#evidence">Evidence</a></nav></header><main><section id="overview"><h2>Overview</h2><p>A configured hybrid model repeats [MLA + MoE, GDN, GDN, GDN] eight times. The 3:1 ratio describes this interleaving, not two sequential stacks. The approximately 30B-token training exposure is planned, not a completed-run claim.</p><a class="card-btn" href="hymo-architecture.html">Open overview diagram</a></section><section id="model"><h2>Model</h2><p>Configured width is 896 and vocabulary is 64,256. Each MLA layer uses latent KV rank 128 and MoE with 16 routed experts, top-2 selection and one shared expert. RoPE behavior is layer-specific. Training-only depth-2 MTP weights are 0.3 and 0.1. No fresh parameter count or MTP correctness certification is claimed.</p><a class="card-btn" href="hymo-architecture.html">Open model diagram</a></section><section id="data"><h2>Data</h2><p>The shared seven-source recipe has an 8B-token preparation budget, distinct from training exposure. The extended tokenizer and caller-owned training batch adapter are separate boundaries. The diagram does not imply that an S+2 PretrainDataset handoff is implemented.</p><a class="card-btn" href="hymo-dataflow.html">Open data diagram</a></section><section id="training"><h2>Training</h2><p>Nonfinite loss skips an update rather than triggering fictional five-failure rollback. Checkpoints use PyTorch Distributed Checkpoint plus JSON metadata, not Safetensors. NorMuon owns eligible dense matrices while AdamW owns experts, embeddings and heads, gates, norms and other excluded parameters. Exact resume is not guaranteed.</p><a class="card-btn" href="hymo-training.html">Open training diagram</a></section><section id="mechanism"><h2>Hybrid mechanisms and optimizations</h2><p>GDN recurrence and MLA have different state costs. Current MLA expands grouped K/V before SDPA, so a compressed-cache calculator would not measure actual allocation. Triton is conditional and requires separate GPU evidence. The removed scalar animation was not an implementation-faithful recurrence simulation. No unsupported speedup or SRAM-only execution claim remains.</p><a class="card-btn" href="hymo-optimizations.html">Open optimization diagram</a></section><section id="evidence"><h2>Evidence</h2><p>Configuration: <code>configs/hymo_750m.yaml</code>. Source revision: <code style="overflow-wrap:anywhere">a88006236ad8a96f17f86298da7fa9afb8c844ad</code>.</p><p>Diagram layout and browser evidence are independent of source accuracy, model correctness and visual polish. The proposed 12px essential / 11px secondary text target is not certified. Perceptual image review, interaction/export acceptance and narrow-screen guide acceptance remain open. No new GPU performance, corpus inventory or trained quality measurement is claimed.</p><p>See <a href="RECEIPTS.md">the evidence ledger</a> for exact specification/artifact hashes and browser sidecars. The guide has no duplicated hash table that can silently become stale.</p></section></main><footer>Source corrections and evidence boundaries, not a performance certificate.</footer></body></html>

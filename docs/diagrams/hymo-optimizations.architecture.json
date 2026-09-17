@@ -2,78 +2,248 @@
   "schema_version": 1,
   "diagram_type": "architecture",
   "meta": {
-    "title": "HyMo Systems, Kernels & Optimization Stack",
-    "quality_profile": "showcase",
-    "views": [
-      {
-        "id": "gpu-kernels",
-        "label": "GPU Kernels",
-        "focus": ["gdn_triton", "flashattn", "fsdp2"],
-        "note": "Custom Triton linear attention and PyTorch 2.5 SDPA execution across distributed A100 GPUs."
-      },
-      {
-        "id": "optimizers",
-        "label": "Dual Optimizer Engine",
-        "focus": ["normuon", "adamw", "wsd_sched"],
-        "note": "2D internal weight matrices optimized via NorMuon Newton-Schulz, 1D parameters via AdamW."
-      },
-      {
-        "id": "durability",
-        "label": "Durability & Storage",
-        "focus": ["safetensors", "fsdp2"],
-        "note": "Atomic safetensors checkpointing with distributed sharding and zero-copy weight resumption."
-      }
-    ]
+    "title": "HyMo Optimization Responsibilities",
+    "quality_profile": "showcase"
   },
   "components": [
-    { "id": "gdn_triton", "type": "backend", "label": "Custom Triton GDN", "sublabel": "chunked delta recurrence", "tag": "SRAM tile", "pos": [60, 150], "size": [160, 70] },
-    { "id": "flashattn", "type": "backend", "label": "SDPA FlashAttn-2", "sublabel": "MLA KV matrix absorption", "tag": "fused kernel", "pos": [260, 150], "size": [160, 70] },
-    { "id": "fsdp2", "type": "cloud", "label": "PyTorch FSDP-2", "sublabel": "per-layer parameter sharding", "tag": "A100 SXM", "pos": [460, 150], "size": [170, 70] },
-    { "id": "normuon", "type": "backend", "label": "NorMuon Optimizer", "sublabel": "Newton-Schulz 2D weights", "tag": "matrix grad", "pos": [670, 150], "size": [170, 70] },
-    { "id": "adamw", "type": "backend", "label": "AdamW Optimizer", "sublabel": "1D biases & embeddings", "pos": [880, 150], "size": [160, 70] },
-    { "id": "wsd_sched", "type": "backend", "label": "WSD Scheduler", "sublabel": "warmup-stable-decay", "pos": [1080, 150], "size": [150, 70] },
-
-    { "id": "safetensors", "type": "database", "label": "Safetensors Storage", "sublabel": "atomic zero-copy disk", "pos": [460, 360], "size": [170, 80] },
-    { "id": "gpu_sram", "type": "database", "label": "GPU SRAM / HBM", "sublabel": "80GB SXM · TF32 matmul", "pos": [160, 360], "size": [160, 80] },
-    { "id": "comm_stream", "type": "messagebus", "label": "NCCL Stream", "sublabel": "all-gather / reduce-scatter", "pos": [770, 360], "size": [180, 80] }
+    {
+      "id": "gdn_triton",
+      "type": "backend",
+      "label": "Conditional Triton GDN",
+      "sublabel": "CUDA + fused_gdn",
+      "tag": "compute",
+      "pos": [
+        60,
+        150
+      ],
+      "size": [
+        160,
+        70
+      ]
+    },
+    {
+      "id": "flashattn",
+      "type": "backend",
+      "label": "Grouped SDPA MLA",
+      "sublabel": "expanded K/V, not absorbed",
+      "tag": "compute",
+      "pos": [
+        260,
+        150
+      ],
+      "size": [
+        160,
+        70
+      ]
+    },
+    {
+      "id": "fsdp2",
+      "type": "backend",
+      "label": "FSDP-2 wrapper",
+      "sublabel": "caller applies wrapping",
+      "tag": "distributed",
+      "pos": [
+        460,
+        150
+      ],
+      "size": [
+        170,
+        70
+      ]
+    },
+    {
+      "id": "normuon",
+      "type": "backend",
+      "label": "NorMuon",
+      "sublabel": "remaining dense 2D weights",
+      "tag": "optimization",
+      "pos": [
+        670,
+        150
+      ],
+      "size": [
+        170,
+        70
+      ]
+    },
+    {
+      "id": "adamw",
+      "type": "backend",
+      "label": "AdamW",
+      "sublabel": "experts / embed / controls",
+      "pos": [
+        880,
+        150
+      ],
+      "size": [
+        160,
+        70
+      ],
+      "tag": "optimization"
+    },
+    {
+      "id": "wsd_sched",
+      "type": "backend",
+      "label": "WSD scheduler",
+      "sublabel": "both optimizer LRs",
+      "pos": [
+        1080,
+        150
+      ],
+      "size": [
+        150,
+        70
+      ],
+      "tag": "schedule"
+    },
+    {
+      "id": "safetensors",
+      "type": "database",
+      "label": "DCP + JSON",
+      "sublabel": "model / optim / scheduler",
+      "pos": [
+        460,
+        360
+      ],
+      "size": [
+        170,
+        80
+      ],
+      "tag": "persistence"
+    },
+    {
+      "id": "gpu_sram",
+      "type": "database",
+      "label": "Tensor allocations",
+      "sublabel": "state / outputs / workspaces",
+      "pos": [
+        160,
+        360
+      ],
+      "size": [
+        160,
+        80
+      ],
+      "tag": "memory"
+    },
+    {
+      "id": "comm_stream",
+      "type": "messagebus",
+      "label": "Parameter partition",
+      "sublabel": "disjoint optimizer owners",
+      "pos": [
+        770,
+        360
+      ],
+      "size": [
+        180,
+        80
+      ],
+      "tag": "ownership"
+    }
   ],
   "boundaries": [
-    { "label": "GPU Acceleration & Execution (src/hymo/models/)", "kind": "region", "wraps": ["gdn_triton", "flashattn", "fsdp2"] },
-    { "label": "Optimization Engine (src/hymo/training/optimizer.py)", "kind": "region", "wraps": ["normuon", "adamw", "wsd_sched"] }
+    {
+      "label": "GPU Acceleration & Execution (src/hymo/models/)",
+      "kind": "region",
+      "wraps": [
+        "gdn_triton",
+        "flashattn",
+        "fsdp2"
+      ]
+    },
+    {
+      "label": "Optimization Engine (src/hymo/training/optimizer.py)",
+      "kind": "region",
+      "wraps": [
+        "normuon",
+        "adamw",
+        "wsd_sched"
+      ]
+    }
   ],
   "connections": [
-    { "id": "c-triton-sram", "from": "gdn_triton", "to": "gpu_sram", "fromSide": "bottom", "toSide": "top", "label": "tiled state" },
-    { "id": "c-flash-sram", "from": "flashattn", "to": "gpu_sram", "fromSide": "bottom", "toSide": "top", "label": "absorbed KV" },
-    { "id": "c-fsdp-ckpt", "from": "fsdp2", "to": "safetensors", "fromSide": "bottom", "toSide": "top", "label": "rank-0 save", "labelAt": [545, 234], "variant": "dashed" },
-    { "id": "c-normuon-nccl", "from": "normuon", "to": "comm_stream", "fromSide": "bottom", "toSide": "top", "label": "2D all-gather" },
-    { "id": "c-adamw-nccl", "from": "adamw", "to": "comm_stream", "fromSide": "bottom", "toSide": "top", "label": "1D moments" },
-    { "id": "c-sched-adamw", "from": "wsd_sched", "to": "adamw", "label": "LR schedule", "labelAt": [1060, 234] },
-    { "id": "c-adamw-normuon", "from": "adamw", "to": "normuon", "label": "dual step", "labelAt": [860, 234] },
-    { "id": "c-fsdp-normuon", "from": "fsdp2", "to": "normuon", "label": "sharded step", "labelAt": [650, 234], "variant": "emphasis" }
+    {
+      "id": "c-triton-sram",
+      "from": "gdn_triton",
+      "to": "gpu_sram",
+      "fromSide": "bottom",
+      "toSide": "top",
+      "label": "recurrence buffers"
+    },
+    {
+      "id": "c-flash-sram",
+      "from": "flashattn",
+      "to": "gpu_sram",
+      "fromSide": "bottom",
+      "toSide": "top",
+      "label": "grouped K/V"
+    },
+    {
+      "id": "c-fsdp-ckpt",
+      "from": "fsdp2",
+      "to": "safetensors",
+      "fromSide": "bottom",
+      "toSide": "top",
+      "label": "DCP state",
+      "labelAt": [
+        545,
+        234
+      ],
+      "variant": "dashed"
+    },
+    {
+      "id": "c-normuon-nccl",
+      "from": "normuon",
+      "to": "comm_stream",
+      "fromSide": "bottom",
+      "toSide": "top",
+      "label": "dense 2D"
+    },
+    {
+      "id": "c-adamw-nccl",
+      "from": "adamw",
+      "to": "comm_stream",
+      "fromSide": "bottom",
+      "toSide": "top",
+      "label": "other parameters"
+    },
+    {
+      "id": "c-sched-adamw",
+      "from": "wsd_sched",
+      "to": "adamw",
+      "label": "LR schedule",
+      "labelAt": [
+        1060,
+        234
+      ]
+    }
   ],
   "cards": [
     {
-      "title": "Custom Triton GDN Kernel",
+      "title": "Execution is conditional",
       "dot": "cyan",
       "items": [
-        "Hand-crafted chunked delta rule implementation executing strictly inside GPU SRAM",
-        "Achieves 3.2× speedup over eager PyTorch loop with zero intermediate tensor allocations"
+        "src/hymo/models/gdn.py:GatedDeltaNetBlock._kernel_out selects Triton only for CUDA with use_triton. CPU uses eager recurrence.",
+        "src/hymo/models/mla.py:MultiHeadLatentAttention.forward expands grouped K/V before SDPA, with explicit repeat fallback. No absorbed execution claim.",
+        "No measured 3.2\u00d7 speedup, zero-allocation guarantee, SRAM-only claim or zero-bubble result is established here."
       ]
     },
     {
-      "title": "NorMuon Matrix Optimization",
+      "title": "Optimizer ownership",
       "dot": "emerald",
       "items": [
-        "Orthogonalizes updates on 2D weight matrices via 5 iterations of quintic Newton-Schulz",
-        "Significantly accelerates pretraining convergence compared to standard isotropic AdamW"
+        "src/hymo/training/partition.py:goes_to_adamw assigns embeddings/head, routed and shared experts, gates, norms, scalar controls and non-2D weights to AdamW.",
+        "Remaining dense 2D matrices go to NorMuon. Joint WSD changes both learning rates. Convergence acceleration is not measured here."
       ]
     },
     {
-      "title": "FSDP-2 Distributed Scaling",
-      "dot": "violet",
+      "title": "Distribution and durability",
+      "dot": "slate",
       "items": [
-        "Fully shards model parameters, gradients, and optimizer moments across A100 80GB nodes",
-        "Overlaps forward all-gather and backward reduce-scatter with compute for near-zero bubble overhead"
+        "configs/hymo_750m.yaml at a88006236ad8a96f17f86298da7fa9afb8c844ad configures four ranks and BF16 FSDP. The caller owns distributed initialization/wrapping.",
+        "src/hymo/training/checkpoint.py:save_checkpoint owns DCP plus JSON metadata, not rank-0 Safetensors or zero-copy resume.",
+        "Checkpoint and resource boxes show responsibilities, not a serial performance pipeline. GPU performance remains unverified."
       ]
     }
   ]

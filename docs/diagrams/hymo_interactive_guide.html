@@ -51,19 +51,19 @@ footer{border-top:1px solid var(--line);margin-top:60px;font-size:14px;color:var
   <div class="eyebrow">Interactive Visual Systems Guide</div>
   <h1>HyMo</h1>
   <p class="lead">
-    A 434M-active / 1.13B-stored hybrid language model combining Gated Delta Networks (24 linear attention layers) with Multi-Head Latent Attention (8 full attention layers), Asymmetric Mixture-of-Experts, and NorMuon matrix optimization. Pretrained on 30B tokens.
+    A configured 32-layer hybrid language model combining Gated Delta Networks (24 linear attention layers) with Multi-Head Latent Attention (8 full attention layers), Asymmetric Mixture-of-Experts, and NorMuon matrix optimization. The training schedule targets approximately 30B tokens of exposure, not a measured completed run.
   </p>
   <div class="pill-bar">
-    <div class="pill">Active Params: <strong>434M per Token</strong></div>
-    <div class="pill">Stored Params: <strong>1.13B Parameters</strong></div>
+    <div class="pill">Width: <strong>896 configured</strong></div>
+    <div class="pill">Vocabulary: <strong>64,256 configured</strong></div>
     <div class="pill">Hybrid Ratio: <strong>3:1 (24 GDN : 8 MLA)</strong></div>
-    <div class="pill">MoE: <strong>1 Shared + 8 Routed (Top-2)</strong></div>
-    <div class="pill">Optimizers: <strong>NorMuon (2D) + AdamW (1D)</strong></div>
+    <div class="pill">MoE: <strong>1 Shared + 16 Routed (Top-2)</strong></div>
+    <div class="pill">Optimizers: <strong>NorMuon + AdamW partition</strong></div>
   </div>
   <nav class="jump-nav">
     <a href="#diagrams">Architecture Maps</a>
-    <a href="#hybrid-calc">Hybrid KV Calculator</a>
-    <a href="#delta-sim">Delta-Rule Simulator</a>
+    <a href="#hybrid-calc">Decode Memory</a>
+    <a href="#delta-sim">Recurrence</a>
     <a href="#specs">System Specs</a>
     <a href="#receipts">Verification Evidence</a>
   </nav>
@@ -73,20 +73,20 @@ footer{border-top:1px solid var(--line);margin-top:60px;font-size:14px;color:var
   <section id="diagrams">
     <div class="eyebrow">Standalone Showcase Deliverables</div>
     <h2>Architecture & Workflow Maps</h2>
-    <p>Four standalone Archify diagrams verified with 9/9 showcase checks and responsive multi-viewport capture.</p>
+    <p>Four source-corrected diagrams. Deterministic and browser evidence are recorded separately below. Perceptual review and the proposed typography target remain pending.</p>
 
     <div class="grid-2">
       <div class="card">
         <h3>Model Architecture <span>🏛️</span></h3>
-        <p>Complete 32-layer hybrid topology: 24 Gated Delta Net blocks (NoPE linear recurrence), 8 Multi-Head Latent Attention blocks, Asymmetric DeepSeekMoE, and depth-2 MTP heads.</p>
+        <p>Complete 32-layer hybrid topology: 24 Gated Delta Net blocks (RoPE enabled in this config), 8 Multi-Head Latent Attention blocks, Asymmetric DeepSeekMoE, and depth-2 MTP heads.</p>
         <code>docs/diagrams/hymo-architecture.html</code>
         <br>
         <a class="card-btn" href="hymo-architecture.html">Open Diagram ↗</a>
       </div>
 
       <div class="card">
-        <h3>30B-Token Data Pipeline <span>⚡</span></h3>
-        <p>Multi-source ingestion (FineWeb-Edu, The Stack v2, Math/ArXiv), MinHash deduplication, 600 binary uint32 shards (120GB), and contiguous S+2 sequence windowing for MTP.</p>
+        <h3>Data Preparation and Handoff <span>⚡</span></h3>
+        <p>Seven-source shared recipe with an 8B-token preparation budget. The HyMo tokenizer and caller-owned training adapter are separate boundaries, not a verified S+2 shard loader.</p>
         <code>docs/diagrams/hymo-dataflow.html</code>
         <br>
         <a class="card-btn" href="hymo-dataflow.html">Open Diagram ↗</a>
@@ -94,7 +94,7 @@ footer{border-top:1px solid var(--line);margin-top:60px;font-size:14px;color:var
 
       <div class="card">
         <h3>Training Workflow & MTP Loop <span>🔄</span></h3>
-        <p>End-to-end distributed pretraining loop: FSDP-2 forward pass, composite multi-token loss ($L_{main} + 0.3 L_{mtp1} + 0.15 L_{mtp2}$), NorMuon/AdamW step, and divergence safety net.</p>
+        <p>End-to-end distributed pretraining loop: FSDP-2 forward pass, composite multi-token loss ($L_{main} + 0.3 L_{mtp1} + 0.1 L_{mtp2}$), NorMuon/AdamW step, and divergence safety net.</p>
         <code>docs/diagrams/hymo-training.html</code>
         <br>
         <a class="card-btn" href="hymo-training.html">Open Diagram ↗</a>
@@ -110,85 +110,8 @@ footer{border-top:1px solid var(--line);margin-top:60px;font-size:14px;color:var
     </div>
   </section>
 
-  <section id="hybrid-calc">
-    <div class="simulator-box">
-      <div class="eyebrow">Interactive Systems Experiment</div>
-      <h2>Hybrid 3:1 GDN:MLA Decode Memory Calculator</h2>
-      <p>Analyze how HyMo's 3:1 hybrid ratio drastically reduces generation memory. 24 GDN layers maintain fixed $O(1)$ state matrices regardless of sequence length, while only 8 MLA layers store compressed latent KV caches.</p>
-
-      <div class="ctrl-row">
-        <div>
-          <label for="seq-len">Context Length (Tokens)</label>
-          <select id="seq-len" onchange="updateHybridCalc()">
-            <option value="2048">2,048 Tokens (2K)</option>
-            <option value="4096" selected>4,096 Tokens (4K Standard)</option>
-            <option value="8192">8,192 Tokens (8K)</option>
-            <option value="16384">16,384 Tokens (16K Extended)</option>
-            <option value="32768">32,768 Tokens (32K)</option>
-            <option value="65536">65,536 Tokens (64K Long-Context)</option>
-          </select>
-        </div>
-        <div>
-          <label for="batch-size">Batch Size</label>
-          <input type="number" id="batch-size" value="1" min="1" max="64" onchange="updateHybridCalc()">
-        </div>
-      </div>
-
-      <div class="calc-result" id="hybrid-results">
-        <div class="calc-stat">
-          <span>Pure Transformer MHA (32 layers, 16 heads, d=96):</span>
-          <strong id="mha-kv">-- MB</strong>
-        </div>
-        <div class="calc-stat">
-          <span>Pure Transformer GQA (32 layers, 4 KV heads):</span>
-          <strong id="gqa-kv">-- MB</strong>
-        </div>
-        <div class="calc-stat">
-          <span>HyMo 3:1 Hybrid (24 O(1) GDN + 8 Latent MLA):</span>
-          <strong id="hymo-kv">-- MB</strong>
-        </div>
-        <div class="calc-stat">
-          <span>Memory Reduction vs Pure GQA:</span>
-          <strong id="gain-val" style="font-size:18px;color:var(--accent)">--</strong>
-        </div>
-      </div>
-    </div>
-  </section>
-
-  <section id="delta-sim">
-    <div class="simulator-box">
-      <div class="eyebrow">Recurrence Simulator</div>
-      <h2>Gated Delta Rule State Evolution Simulator</h2>
-      <p>Simulate how the Gated Delta Rule update $S_t = \beta_t S_{t-1} + (v_t - S_{t-1} k_t) k_t^T$ selectively writes new key-value bindings into recurrent state memory while erasing conflicting memories.</p>
-
-      <div class="ctrl-row">
-        <div>
-          <label for="beta-slider">Decay Gate (&beta;<sub>t</sub>): <span id="beta-val">0.95</span></label>
-          <input type="range" id="beta-slider" min="0.80" max="1.00" step="0.01" value="0.95" oninput="document.getElementById('beta-val').textContent=this.value; updateDeltaSim()">
-        </div>
-        <div>
-          <label for="sim-step-btn">Simulate Token Stream</label>
-          <button id="sim-step-btn" onclick="stepDeltaSim()" style="padding:10px 16px;border-radius:8px;background:var(--accent);color:#fff;border:none;cursor:pointer;font-weight:600;font-size:14px">Feed Next Token (Step <span id="delta-step">0</span>)</button>
-        </div>
-      </div>
-
-      <div class="calc-result">
-        <div class="calc-stat">
-          <span>State Norm ||S<sub>t</sub>||<sub>F</sub>:</span>
-          <strong id="state-norm">1.000</strong>
-        </div>
-        <div class="calc-stat">
-          <span>State Retention Factor (&beta;<sup>t</sup>):</span>
-          <strong id="retention-factor">1.000</strong>
-        </div>
-        <div class="calc-stat">
-          <span>Recurrence Execution:</span>
-          <strong style="color:var(--accent)">SRAM-Tiled Custom Triton Kernel (3.2× vs PyTorch)</strong>
-        </div>
-      </div>
-    </div>
-  </section>
-
+  <section id="hybrid-calc"><h2>Decode-memory evidence boundary</h2><p>The former calculator treated a hypothetical compressed cache as implemented allocation. Current MLA expands grouped K/V before SDPA. No physical decode-memory benchmark or cache-saving ratio is claimed here.</p></section>
+  <section id="delta-sim"><h2>Recurrence evidence boundary</h2><p>The former scalar animation did not simulate the implemented recurrence and has been removed. See <code>src/hymo/models/gdn.py:GatedDeltaNetBlock._gated_delta_rule</code> for the FP32 state update. Triton speedup requires a separate GPU benchmark.</p></section>
   <section id="specs">
     <div class="eyebrow">Architecture Specifications</div>
     <h2>HyMo Technical Parameters</h2>
@@ -197,13 +120,13 @@ footer{border-top:1px solid var(--line);margin-top:60px;font-size:14px;color:var
         <tr><th>Module</th><th>Configuration</th><th>Symbol Citation</th></tr>
       </thead>
       <tbody>
-        <tr><td><strong>Backbone</strong></td><td>32 layers (24 GDN + 8 MLA), d_model=1536</td><td><code>src/hymo/models/model.py:HyMo</code></td></tr>
-        <tr><td><strong>Gated Delta Net (GDN)</strong></td><td>24 layers, delta rule recurrence, NoPE linear attention</td><td><code>src/hymo/models/gdn.py:GatedDeltaNet</code></td></tr>
-        <tr><td><strong>Triton Recurrence Kernel</strong></td><td>Hand-crafted chunked delta rule in GPU SRAM</td><td><code>src/hymo/models/gdn_triton.py:triton_gated_delta_rule</code></td></tr>
-        <tr><td><strong>MLA Layers</strong></td><td>8 layers, latent KV dim d_c=512, MQA-4, partial RoPE</td><td><code>src/hymo/models/mla.py:MultiHeadLatentAttention</code></td></tr>
-        <tr><td><strong>DeepSeekMoE</strong></td><td>1 shared + 8 routed experts (top-2 active), aux-loss-free</td><td><code>src/hymo/models/moe.py:DeepSeekMoE</code></td></tr>
-        <tr><td><strong>MTP Heads</strong></td><td>Depth-2 auxiliary prediction heads (loss weights 0.3, 0.15)</td><td><code>src/hymo/models/mtp.py:MTPModule</code></td></tr>
-        <tr><td><strong>Dual Optimizer</strong></td><td>NorMuon on 2D matrices (Newton-Schulz) + AdamW on 1D</td><td><code>src/hymo/training/optimizer.py:build_optimizer</code></td></tr>
+        <tr><td><strong>Backbone</strong></td><td>32 layers (24 GDN + 8 MLA), d_model=896</td><td><code>src/hymo/models/model.py:HyMo</code></td></tr>
+        <tr><td><strong>Gated Delta Net (GDN)</strong></td><td>24 layers, delta rule recurrence, RoPE-enabled recurrence</td><td><code>src/hymo/models/gdn.py:GatedDeltaNetBlock</code></td></tr>
+        <tr><td><strong>Triton Recurrence Kernel</strong></td><td>Conditional CUDA Triton recurrence, not SRAM-only execution</td><td><code>src/hymo/models/gdn_triton.py:triton_gated_delta_rule</code></td></tr>
+        <tr><td><strong>MLA Layers</strong></td><td>8 layers, latent KV dim d_c=128, MQA-4, partial RoPE</td><td><code>src/hymo/models/mla.py:MultiHeadLatentAttention</code></td></tr>
+        <tr><td><strong>DeepSeekMoE</strong></td><td>1 shared + 16 routed experts (top-2 active), aux-loss-free</td><td><code>src/hymo/models/moe.py:DeepSeekMoE</code></td></tr>
+        <tr><td><strong>MTP Heads</strong></td><td>Depth-2 auxiliary prediction heads (loss weights 0.3, 0.1)</td><td><code>src/hymo/models/mtp.py:MultiTokenPrediction</code></td></tr>
+        <tr><td><strong>Dual Optimizer</strong></td><td>NorMuon on remaining dense 2D matrices. AdamW on experts, embeddings/head, gates, norms, scalars and non-2D weights</td><td><code>src/hymo/training/optimizer.py:build_optimizers</code></td></tr>
       </tbody>
     </table>
   </section>
@@ -217,69 +140,19 @@ footer{border-top:1px solid var(--line);margin-top:60px;font-size:14px;color:var
         <tr><th>Artifact</th><th>Type</th><th>SHA-256 Hash</th><th>Byte Size</th></tr>
       </thead>
       <tbody>
-        <tr><td><code>hymo-architecture.html</code></td><td>architecture</td><td><code>512126a52a089e2c3b5d53972281ea96d85cfc7b26eddd3a66699b8608f83e92</code></td><td>719,174 B</td></tr>
-        <tr><td><code>hymo-dataflow.html</code></td><td>dataflow</td><td><code>a348b407f79eb2d56c463f175c2247f9458d2d2f447b910455f6bd0257f6a006</code></td><td>714,119 B</td></tr>
-        <tr><td><code>hymo-training.html</code></td><td>workflow</td><td><code>fc79c8669943a784276aa97f0306d94fc9d1023ce7626ee824c8aca07b33b388</code></td><td>715,121 B</td></tr>
-        <tr><td><code>hymo-optimizations.html</code></td><td>architecture</td><td><code>c8fa7c5ba29170ffcc4a9216da3d866bd1c6fab414ffaa37bda4cbc35076abd3</code></td><td>716,277 B</td></tr>
+        <tr><td><code>hymo-architecture.html</code></td><td>architecture</td><td><code>f9be95cc496ab4141a576fa8ca9895d7617b834d83649fc35bd9ed49da0eab37</code></td><td>709,335 B</td></tr>
+        <tr><td><code>hymo-dataflow.html</code></td><td>dataflow</td><td><code>c6716875c6a94fd74527c7e51e68fdfd5a681aa99c1dd103cf441ae7f09353f1</code></td><td>713,995 B</td></tr>
+        <tr><td><code>hymo-training.html</code></td><td>workflow</td><td><code>2da893beb41e01838e57735ddd5108f0c308bf1f44030bcef34d5bcbad2f27f7</code></td><td>718,786 B</td></tr>
+        <tr><td><code>hymo-optimizations.html</code></td><td>architecture</td><td><code>cafa21f47bab71fced609849f1c30f26563f6ac15431d549d7f17b17f073befc</code></td><td>715,338 B</td></tr>
       </tbody>
     </table>
   </section>
 </main>
 
 <footer>
-  <p>HyMo Illustrated Systems Guide · Verified Archify Showcase Delivery · Source-anchored to PyTorch repository.</p>
+  <p>HyMo Illustrated Systems Guide · Source-corrected Archify documentation · Source-anchored to PyTorch repository.</p>
 </footer>
 
-<script>
-function updateHybridCalc() {
-  const S = parseInt(document.getElementById('seq-len').value, 10);
-  const B = parseInt(document.getElementById('batch-size').value, 10);
 
-  const total_layers = 32;
-  const d_head = 96;
-  const bytes_per_elem = 2; // BF16
-
-  // Pure 32-layer MHA: 16 KV heads * 96 * 2 (K+V) = 3072 floats/token/layer
-  const mha_bytes = B * total_layers * (2 * 16 * d_head) * S * bytes_per_elem;
-
-  // Pure 32-layer GQA: 4 KV heads * 96 * 2 = 768 floats/token/layer
-  const gqa_bytes = B * total_layers * (2 * 4 * d_head) * S * bytes_per_elem;
-
-  // HyMo 3:1 Hybrid:
-  // 24 GDN layers: Fixed constant state matrix O(1) across decode: d_state=64, 16 heads -> 24 * 16 * 64 * 64 floats (fixed)
-  const gdn_fixed_bytes = B * 24 * (16 * 64 * 64) * bytes_per_elem;
-  // 8 MLA layers: Latent KV vector d_c=512 + decoupled RoPE d_R=64 -> 576 floats/token/layer
-  const mla_dyn_bytes = B * 8 * (512 + 64) * S * bytes_per_elem;
-  const hymo_bytes = gdn_fixed_bytes + mla_dyn_bytes;
-
-  document.getElementById('mha-kv').textContent = (mha_bytes / (1024 * 1024)).toFixed(2) + ' MB';
-  document.getElementById('gqa-kv').textContent = (gqa_bytes / (1024 * 1024)).toFixed(2) + ' MB';
-  document.getElementById('hymo-kv').textContent = (hymo_bytes / (1024 * 1024)).toFixed(2) + ' MB';
-
-  const gain = (gqa_bytes / hymo_bytes).toFixed(2);
-  document.getElementById('gain-val').textContent = gain + '× Memory Reduction vs Pure GQA (' + (mha_bytes / hymo_bytes).toFixed(1) + '× vs MHA)';
-}
-
-let deltaStep = 0;
-let stateNorm = 1.0;
-
-function stepDeltaSim() {
-  deltaStep++;
-  document.getElementById('delta-step').textContent = deltaStep;
-  const beta = parseFloat(document.getElementById('beta-slider').value);
-
-  // Simulate delta state update norm
-  stateNorm = beta * stateNorm + (1.0 - beta) * (0.8 + 0.4 * Math.sin(deltaStep * 0.5));
-  document.getElementById('state-norm').textContent = stateNorm.toFixed(3);
-  document.getElementById('retention-factor').textContent = Math.pow(beta, Math.min(deltaStep, 50)).toFixed(4);
-}
-
-function updateDeltaSim() {
-  const beta = parseFloat(document.getElementById('beta-slider').value);
-  document.getElementById('retention-factor').textContent = Math.pow(beta, Math.min(deltaStep, 50)).toFixed(4);
-}
-
-updateHybridCalc();
-</script>
 </body>
 </html>

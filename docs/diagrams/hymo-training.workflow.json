@@ -2,90 +2,287 @@
   "schema_version": 2,
   "diagram_type": "workflow",
   "meta": {
-    "title": "HyMo Pretraining Pipeline — training/trainer.py",
-    "quality_profile": "showcase",
-    "legend": { "mode": "hidden" },
-    "views": [
-      {
-        "id": "main-step",
-        "label": "Training Step",
-        "focus": ["yaml", "init", "loader", "fwd", "loss", "bwd", "clip", "optim"],
-        "note": "Main training path: FSDP-2 hybrid forward, multi-token loss rollout, and NorMuon/AdamW step."
-      },
-      {
-        "id": "fault-safety",
-        "label": "Fault Safety",
-        "focus": ["fwd", "nan", "rollback", "ckpt"],
-        "note": "NaN guard detects loss divergence; 5 consecutive failures roll back to last atomic checkpoint."
-      },
-      {
-        "id": "optimizer-cadence",
-        "label": "Optimizer Cadence",
-        "focus": ["optim", "bias", "ckpt"],
-        "note": "NorMuon on 2D matrices + AdamW on vectors, paired with out-of-band MoE dynamic bias updates."
-      }
-    ]
+    "title": "HyMo Training Updates and Nonfinite Skip",
+    "quality_profile": "showcase"
   },
   "lanes": [
-    { "id": "setup", "label": "Setup & Update" },
-    { "id": "micro", "label": "Training Step (Accumulation)" },
-    { "id": "guard", "label": "Fault Tolerance", "variant": "exception" }
+    {
+      "id": "micro",
+      "label": "Micro-batch path"
+    },
+    {
+      "id": "update",
+      "label": "Optimizer boundary"
+    },
+    {
+      "id": "control",
+      "label": "Iteration and persistence"
+    }
   ],
-  "mainPath": ["yaml", "init", "loader", "fwd", "loss", "bwd", "clip", "optim"],
+  "mainPath": [
+    "fetch",
+    "loss",
+    "finite",
+    "bwd",
+    "boundary",
+    "commit",
+    "cadence"
+  ],
   "nodes": [
-    { "id": "yaml", "type": "external", "label": "pretrain YAML", "sublabel": "A100 FSDP-2", "lane": "setup", "col": 0, "width": 116, "height": 46 },
-    { "id": "init", "type": "backend", "label": "build_hymo()", "sublabel": "FSDP-2 · NorMuon", "lane": "setup", "col": 1, "width": 116, "height": 46 },
-    { "id": "loader", "type": "messagebus", "label": "DataLoader", "sublabel": "uint32 shards", "lane": "micro", "col": 1, "width": 116, "height": 46 },
-    { "id": "fwd", "type": "backend", "label": "Hybrid Forward", "sublabel": "GDN + MLA + MoE", "lane": "micro", "col": 2, "width": 116, "height": 46 },
-    { "id": "loss", "type": "backend", "label": "Composite Loss", "sublabel": "CE + 0.3·MTP", "lane": "micro", "col": 3, "width": 116, "height": 46 },
-    { "id": "bwd", "type": "backend", "label": "backward()", "sublabel": "FP32 grad accum", "lane": "micro", "col": 4, "width": 116, "height": 46 },
-    { "id": "clip", "type": "backend", "label": "Grad Clip", "sublabel": "norm ≤ 1.0", "lane": "micro", "col": 5, "width": 116, "height": 46 },
-    { "id": "optim", "type": "backend", "label": "Optimizer Step", "sublabel": "NorMuon + AdamW", "lane": "setup", "col": 5, "width": 116, "height": 46 },
-
-    { "id": "bias", "type": "messagebus", "label": "MoE Bias Update", "sublabel": "dynamic steering", "lane": "setup", "col": 4, "width": 116, "height": 46 },
-    { "id": "nan", "type": "security", "label": "Loss Guard", "sublabel": "finite check", "lane": "guard", "col": 2, "width": 116, "height": 46 },
-    { "id": "rollback", "type": "security", "label": "Rollback", "sublabel": "restore state", "lane": "guard", "col": 3, "width": 116, "height": 46 },
-    { "id": "ckpt", "type": "database", "label": "Safetensors", "sublabel": "atomic checkpoint", "lane": "guard", "col": 5, "width": 116, "height": 46 }
+    {
+      "id": "fetch",
+      "type": "external",
+      "label": "Fetch pair",
+      "sublabel": "tokens + targets",
+      "lane": "micro",
+      "col": 0,
+      "width": 150,
+      "height": 58
+    },
+    {
+      "id": "loss",
+      "type": "backend",
+      "label": "Forward + CE",
+      "sublabel": "main + weighted MTP",
+      "lane": "micro",
+      "col": 1,
+      "width": 150,
+      "height": 58
+    },
+    {
+      "id": "finite",
+      "type": "security",
+      "label": "Finite loss?",
+      "sublabel": "loss_nan_skip enabled",
+      "lane": "micro",
+      "col": 2,
+      "width": 150,
+      "height": 58
+    },
+    {
+      "id": "bwd",
+      "type": "backend",
+      "label": "Backward",
+      "sublabel": "loss / 8",
+      "lane": "micro",
+      "col": 3,
+      "width": 150,
+      "height": 58
+    },
+    {
+      "id": "boundary",
+      "type": "security",
+      "label": "Update due?",
+      "sublabel": "micro_step % 8 == 0",
+      "lane": "micro",
+      "col": 4,
+      "width": 150,
+      "height": 58
+    },
+    {
+      "id": "skip",
+      "type": "security",
+      "label": "Clear gradients",
+      "sublabel": "skip, no rollback",
+      "lane": "update",
+      "col": 2,
+      "width": 150,
+      "height": 58
+    },
+    {
+      "id": "commit",
+      "type": "backend",
+      "label": "Clip + dual step",
+      "sublabel": "LR, bias, scheduler",
+      "lane": "update",
+      "col": 4,
+      "width": 150,
+      "height": 58
+    },
+    {
+      "id": "cadence",
+      "type": "backend",
+      "label": "Update cadence",
+      "sublabel": "log / eval / save",
+      "lane": "update",
+      "col": 5,
+      "width": 150,
+      "height": 58
+    },
+    {
+      "id": "next",
+      "type": "security",
+      "label": "Continue?",
+      "sublabel": "step < max_steps",
+      "lane": "control",
+      "col": 0,
+      "width": 150,
+      "height": 58
+    },
+    {
+      "id": "stop",
+      "type": "external",
+      "label": "Stop",
+      "sublabel": "step limit",
+      "lane": "control",
+      "col": 1,
+      "width": 150,
+      "height": 58
+    },
+    {
+      "id": "ckpt",
+      "type": "database",
+      "label": "DCP + JSON",
+      "sublabel": "model / optim / RNG",
+      "lane": "control",
+      "col": 5,
+      "width": 150,
+      "height": 58
+    },
+    {
+      "id": "exhausted",
+      "type": "external",
+      "label": "Input exhausted",
+      "sublabel": "no final-save guarantee",
+      "lane": "update",
+      "col": 0,
+      "width": 150,
+      "height": 58
+    }
   ],
   "edges": [
-    { "id": "e-yaml-init", "from": "yaml", "to": "init", "variant": "emphasis" },
-    { "id": "e-init-loader", "from": "init", "to": "loader" },
-    { "id": "e-loader-fwd", "from": "loader", "to": "fwd", "label": "(B,S+2)" },
-    { "id": "e-fwd-loss", "from": "fwd", "to": "loss", "label": "logits", "variant": "emphasis" },
-    { "id": "e-loss-bwd", "from": "loss", "to": "bwd" },
-    { "id": "e-bwd-clip", "from": "bwd", "to": "clip", "variant": "emphasis" },
-    { "id": "e-clip-optim", "from": "clip", "to": "optim" },
-
-    { "id": "e-fwd-nan", "from": "fwd", "to": "nan", "role": "error", "variant": "security" },
-    { "id": "e-nan-bwd", "from": "nan", "to": "bwd", "label": "finite", "role": "return" },
-    { "id": "e-nan-rollback", "from": "nan", "to": "rollback", "label": "streak ≥ 5", "role": "error", "variant": "security" },
-
-    { "id": "e-optim-bias", "from": "optim", "to": "bias", "variant": "dashed" },
-    { "id": "e-optim-ckpt", "from": "optim", "to": "ckpt", "variant": "dashed" }
+    {
+      "id": "fetch-loss",
+      "from": "fetch",
+      "to": "loss",
+      "role": "main",
+      "variant": "default"
+    },
+    {
+      "id": "loss-finite",
+      "from": "loss",
+      "to": "finite",
+      "role": "main",
+      "variant": "default"
+    },
+    {
+      "id": "finite-bwd",
+      "from": "finite",
+      "to": "bwd",
+      "role": "main",
+      "variant": "default",
+      "label": "yes"
+    },
+    {
+      "id": "finite-skip",
+      "from": "finite",
+      "to": "skip",
+      "role": "error",
+      "variant": "security",
+      "label": "no"
+    },
+    {
+      "id": "skip-next",
+      "from": "skip",
+      "to": "next",
+      "role": "return",
+      "variant": "default"
+    },
+    {
+      "id": "bwd-boundary",
+      "from": "bwd",
+      "to": "boundary",
+      "role": "main",
+      "variant": "default"
+    },
+    {
+      "id": "boundary-commit",
+      "from": "boundary",
+      "to": "commit",
+      "role": "main",
+      "variant": "default",
+      "label": "yes"
+    },
+    {
+      "id": "boundary-next",
+      "from": "boundary",
+      "to": "next",
+      "role": "return",
+      "variant": "default",
+      "label": "no"
+    },
+    {
+      "id": "commit-cadence",
+      "from": "commit",
+      "to": "cadence",
+      "role": "main",
+      "variant": "default"
+    },
+    {
+      "id": "cadence-next",
+      "from": "cadence",
+      "to": "next",
+      "role": "return",
+      "variant": "default"
+    },
+    {
+      "id": "cadence-ckpt",
+      "from": "cadence",
+      "to": "ckpt",
+      "role": "branch",
+      "variant": "dashed",
+      "label": "save due"
+    },
+    {
+      "id": "next-fetch",
+      "from": "next",
+      "to": "fetch",
+      "role": "return",
+      "variant": "default",
+      "label": "yes"
+    },
+    {
+      "id": "next-stop",
+      "from": "next",
+      "to": "stop",
+      "role": "branch",
+      "variant": "default",
+      "label": "no"
+    },
+    {
+      "id": "fetch-exhausted",
+      "from": "fetch",
+      "to": "exhausted",
+      "label": "exhausted",
+      "role": "branch"
+    }
   ],
   "cards": [
     {
-      "title": "Dual Optimizer Partition",
+      "title": "Configured update clock",
       "dot": "cyan",
       "items": [
-        "NorMuon updates 2D weight matrices via Newton-Schulz iteration",
-        "AdamW handles 1D vectors and embeddings with WSD schedule"
+        "configs/hymo_750m.yaml at a88006236ad8a96f17f86298da7fa9afb8c844ad.",
+        "8 micro-batches/update. Log every 50, evaluate every 2,000, save every 4,000 optimizer updates. Best validation loss also triggers save.",
+        "src/hymo/training/trainer.py:Trainer.train_step clips at 1.0, sets LR, steps optimizers, updates MoE bias and advances scheduler."
       ]
     },
     {
-      "title": "Composite MTP Loss",
-      "dot": "emerald",
+      "title": "Loss and skip semantics",
+      "dot": "amber",
       "items": [
-        "Joint loss = CrossEntropy(y_t) + 0.3·MTP_1 + 0.15·MTP_2",
-        "Chunked cross-entropy prevents intermediate VRAM spikes"
+        "Materialized main logits feed ordinary cross_entropy, not chunked CE. Main loss slices logits and supplied targets to :-1.",
+        "MTP weights are 0.3 and 0.1. Auxiliary target/conditioning correctness is a separate investigation.",
+        "Nonfinite loss clears gradients and returns skipped without incrementing micro_step. There is no five-failure rollback."
       ]
     },
     {
-      "title": "Divergence Guard",
-      "dot": "rose",
+      "title": "Persistence, not exact resume",
+      "dot": "slate",
       "items": [
-        "Finite loss guard checks every micro-step before backward pass",
-        "Atomic safetensors checkpointing with bitwise-exact resume"
+        "src/hymo/training/checkpoint.py:save_checkpoint writes DCP tensors and hymo_meta.json with RNG/counters. Only JSON uses temporary-file replacement.",
+        "No sampler position, pending gradients or micro_step are restored. Trainer.train does not guarantee a final checkpoint on exit.",
+        "NorMuon handles remaining dense 2D matrices. AdamW owns embeddings/head, experts, gates, norms, scalars and non-2D parameters."
       ]
     }
   ]

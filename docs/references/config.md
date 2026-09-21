@@ -32,6 +32,21 @@ The dependency graph is `core ← utils ← {models, training, data, eval}` (see
 
 `src/hymo/core/config.py` defines five `@dataclass(frozen=True)` classes. `HyMoConfig` aggregates them. Each sub-config has its own `__post_init__` that validates its fields independently.
 
+**Symbol index** (public surface of the three files this reference covers):
+
+| Symbol | Anchor | Role |
+|---|---|---|
+| `ModelConfig` | `src/hymo/core/config.py:ModelConfig` | architecture (§2.1) |
+| `OptimizerConfig` | `src/hymo/core/config.py:OptimizerConfig` | both optimizers' hyperparameters (§2.2) |
+| `SchedulerConfig` | `src/hymo/core/config.py:SchedulerConfig` | WSD shape (§2.3) |
+| `TrainingConfig` | `src/hymo/core/config.py:TrainingConfig` | batch, FSDP, cadence (§2.4) |
+| `RunConfig` | `src/hymo/core/config.py:RunConfig` | run name + output dir (§2.5) |
+| `HyMoConfig` | `src/hymo/core/config.py:HyMoConfig` | the aggregate (§2.6) |
+| `derive_config` | `src/hymo/core/config.py:derive_config` | frozen-safe variant builder |
+| `save_config` | `src/hymo/core/config.py:save_config` | writes a config back to YAML |
+| `validate_full_config` | `src/hymo/core/config_validation.py:validate_full_config` | cross-field invariants (§3) |
+| semantic newtypes | `src/hymo/core/types.py:TokenId`, `src/hymo/core/types.py:Step`, `src/hymo/core/types.py:MicroStep`, `src/hymo/core/types.py:LayerIndex`, `src/hymo/core/types.py:ExpertIndex` | index/step disambiguation (§2.7) |
+
 ### 2.1 `ModelConfig` (line 23)
 
 Architectural hyperparameters — the only place in the code that defines *what the model is*.

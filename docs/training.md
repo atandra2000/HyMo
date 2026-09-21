@@ -9,9 +9,10 @@ The `src/hymo/eval/` package (`harness.py`, `baselines.py`, `comparison.py`, `ru
 The live evaluation surface in-repo:
 
 - `src/hymo/training/validation.py` — `compute_validation_loss`,
-  `get_val_batch`, `ValMetrics` (used by `Trainer` at `eval_interval`).
+  `get_val_batch` (`src/hymo/training/validation.py:ValMetrics` returned;
+  used by `Trainer` at `eval_interval`).
 - `src/hymo/data/prepare_validation.py` — builds the held-out FineWeb-Edu
-  validation binary.
+  validation binary (CLI entrypoint: `src/hymo/data/prepare_validation.py:main`).
 - `src/hymo/core/config_validation.py` — `validate_full_config` (the
   cross-field checks the ablation builder used).
 
@@ -444,7 +445,7 @@ class ParameterPartition:
         self.nor_muon: list[nn.Parameter] = []
 ```
 
-`partition_parameters(model)` walks `model.named_parameters()` and funnels each parameter into the right bucket. It's a single pass; no shuffling, no sorting.
+`partition_parameters(model)` (`src/hymo/training/partition.py:ParameterPartition` holds the result) walks `model.named_parameters()` and funnels each parameter into the right bucket. It's a single pass; no shuffling, no sorting.
 
 ### 2.3 Why this partition?
 
@@ -985,6 +986,8 @@ Read the current LR from group[0]. These are logged to W&B every `log_interval` 
 ---
 
 ### Checkpointing (`checkpoint.py`)
+
+All checkpoint machinery lives in `src/hymo/training/checkpoint.py:CheckpointState` (the metadata dataclass), `src/hymo/training/checkpoint.py:save_checkpoint`, and `src/hymo/training/checkpoint.py:load_checkpoint`.
 
 ### 7.1 `CheckpointState`
 

@@ -3,7 +3,8 @@
 > Start with a concept chapter to understand the design, use the reference pages
 > when reading code, and use the guides when operating the repository. The
 > canonical layout is `concepts/` for theory, `references/` for APIs/config,
-> `guides/` for workflows, and `training.md` for the end-to-end loop.
+> `guides/` for workflows, and `training.md` for the end-to-end loop. The
+> standing audit of this corpus lives in [`AUDIT.md`](AUDIT.md).
 
 ## Visual Systems Atlas
 
@@ -28,9 +29,17 @@ Explore the [Interactive Visual Systems Guide](diagrams/hymo_interactive_guide.h
 | [`references/config.md`](references/config.md) | The typed-config system: every sub-config, field table, validation rule |
 | [`references/api.md`](references/api.md) | Model + trainer public API surface |
 | [`guides/quickstart.md`](guides/quickstart.md) | Install, first forward pass, tests and gates |
+| [`guides/learning-paths.md`](guides/learning-paths.md) | Three ordered routes (beginner / intermediate / expert) with landmark checks |
+| [`guides/glossary.md`](guides/glossary.md) | Notation table + terms, keyed to `configs/hymo_750m.yaml` values |
+| [`AUDIT.md`](AUDIT.md) | Verification runs, findings, module map, acceptance criteria |
 | [`training.md`](training.md) | Data pipeline, trainer loop, checkpointing, in-training validation, eval scope |
 
 ## Reading orders
+
+Prefer a guided route with landmark checks per tier? Follow
+[`guides/learning-paths.md`](guides/learning-paths.md); keep
+[`guides/glossary.md`](guides/glossary.md) open as you read. The
+task-specific orders below remain the short versions.
 
 ### 1. Interview prep (2–3 hours)
 
@@ -62,8 +71,11 @@ Explore the [Interactive Visual Systems Guide](diagrams/hymo_interactive_guide.h
 The docs favor short explanations next to concrete code symbols: formulas explain
 mechanisms, while implementation notes call out deliberate plan/code differences.
 
-- **`file.py:Symbol` anchors** in every doc are verified against the code at
-  the HEAD commit by `tests/test_doc_refs.py` (symbols resolve via import; line-number anchors are not used).
+- **Symbol anchors** in every doc are verified against the code at
+  the HEAD commit by `tests/test_doc_refs.py` and
+  `scripts/check_docs.py` (the latter adds public-symbol coverage).
+  Symbols resolve via import; line-range anchors are also accepted and
+  checked against EOF, but new prose should stick to symbols.
 - **Blockquotes** highlight plan-vs-implementation drift — if a design doc
   says one thing and the code does another, the blockquote says so.
 - **No fabricated paths.** A doc that references `data/prepare_data.py`
@@ -73,11 +85,16 @@ mechanisms, while implementation notes call out deliberate plan/code differences
 
 ## History
 
+- **2026-08-20 — Wave-1 docs upgrade.** `scripts/check_docs.py` ported
+  (adds `--coverage` over all public symbols in the 19 shipped modules),
+  citation gaps closed, [`guides/learning-paths.md`](guides/learning-paths.md),
+  [`guides/glossary.md`](guides/glossary.md), and [`AUDIT.md`](AUDIT.md)
+  added; nav wired. See the audit for findings and measured numbers.
 - **2026-08-05 — canonical documentation layout.** `learning_docs/`
   (6 chapters) and the process docs (`PHASE_1_DELIVERY.md`, `HyMo-Roadmap.md`, `docs/superpowers/`) were removed. The corpus was consolidated into the canonical layout above. The roadmap's 2-line status: Phase 1–4 implementation shipped (with the 2026-08-04 cleanup trimming test-only `eval/`/`ablations/`/data-pipeline modules), the 30B-token pre-training run remains the v1.0 milestone.
 
 ## Test counts (live, not historical)
 
-**226 tests collected (2026-08-05): 191 passed / 35 skipped.** Default `pytest` skips the GPU-gated tests (heavy model construction, CUDA-required, Triton-not-available); `pytest --run-heavy` runs all 226.
+**238 tests collected (2026-08-20): 203 passed / 35 skipped.** Default `pytest` skips the GPU-gated tests (heavy model construction, CUDA-required, Triton-not-available); `pytest --run-heavy` runs all 238.
 
-Re-run command: `cd /Users/atandrabharati/Desktop/CoreProjects/LLM/HyMo && python3 -m pytest -q --tb=no 2>&1 | tail -3`.
+Re-run command: `cd /Users/atandrabharati/Desktop/CoreProjects/LLM/HyMo && python3 -m pytest --tb=no 2>&1 | tail -3`.

@@ -767,3 +767,20 @@ Trade-offs:
 - [optimization.md](optimization.md) — NorMuon/AdamW, WSD, FSDP-2, and the optimization flags.
 - [design.md](design.md) — the full architecture & design document (v1.0).
 - Source: `src/hymo/models/gdn.py`, `src/hymo/models/gdn_triton.py`, `src/hymo/models/mla.py`, `src/hymo/models/moe.py`, `src/hymo/models/mtp.py`, `src/hymo/models/rope.py`, `src/hymo/models/model.py`.
+
+## Corrections (2026-09-21)
+
+Two claims in the sections above predate the current code; the code wins, and
+the focused topic docs carry the corrected story:
+
+- **DenseFFN on GDN blocks.** The "Hybrid Architectures" section above says
+  the 24 GDN blocks "each have a `DenseFFN` (SwiGLU, `inter_dim = 2560`)". A
+  `DenseFFN` was removed in the 2026-08-04 cleanup and is never instantiated:
+  `src/hymo/models/gdn.py:GatedDeltaNetBlock.__init__` builds only recurrence
+  projections — GDN blocks are recurrence-only, and all FFN/MoE capacity
+  lives on the 8 MLA blocks. See [`asymmetric-moe.md`](asymmetric-moe.md).
+- **MTP head wiring.** The MTP section's pseudo-code shows flat heads on the
+  main hidden state. The shipped `src/hymo/models/mtp.py:MultiTokenPrediction.forward`
+  is *chained*: head `d` consumes the previous head's output hidden state
+  fused with the target token's embedding, per the DeepSeek-V3 sequential
+  pattern. See [`mtp.md`](mtp.md).

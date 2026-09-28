@@ -23,7 +23,12 @@ Explore the [Interactive Visual Systems Guide](diagrams/hymo_interactive_guide.h
 | [`README.md`](../README.md) | Project overview, architecture table, quickstart pointer |
 | [`concepts/model-architecture.md`](concepts/model-architecture.md) | Line-by-line code walkthrough of `src/hymo/models/` (model, GDN, MLA, MoE, MTP, RoPE) |
 | [`concepts/gdn-and-mla.md`](concepts/gdn-and-mla.md) | Mechanism deep-dives: GDN, MLA, MoE, MTP, hybrid-stack thesis |
+| [`concepts/hybrid-ratio.md`](concepts/hybrid-ratio.md) | Topic focus: why 24 GDN + 8 MLA — what each block type buys, placement derivation |
+| [`concepts/asymmetric-moe.md`](concepts/asymmetric-moe.md) | Topic focus: MoE placement (8 of 32 layers) + the 16+1/top-2 expert configuration |
+| [`concepts/mtp.md`](concepts/mtp.md) | Topic focus: chained multi-token prediction heads, loss weights, inference cost |
 | [`concepts/optimization.md`](concepts/optimization.md) | NorMuon/AdamW, WSD, FSDP-2, initialization status, optimization flags |
+| [`concepts/dual-optimizers.md`](concepts/dual-optimizers.md) | Topic focus: NorMuon + CautiousAdamW, the parameter partition, trainer wiring |
+| [`concepts/fsdp2.md`](concepts/fsdp2.md) | Topic focus: full-sharding mechanics, block-level sharding units, wiring status |
 | [`concepts/kernels.md`](concepts/kernels.md) | GPU execution model + the hand-written Triton GDN kernel |
 | [`concepts/design.md`](concepts/design.md) | The full v1.0 architecture & design document |
 | [`references/config.md`](references/config.md) | The typed-config system: every sub-config, field table, validation rule |
@@ -85,6 +90,7 @@ mechanisms, while implementation notes call out deliberate plan/code differences
 
 ## History
 
+- **2026-09-21 — concepts cluster + citation-density push (Wave-1 special work).** Five topic-focus concept docs added — [`concepts/hybrid-ratio.md`](concepts/hybrid-ratio.md), [`concepts/asymmetric-moe.md`](concepts/asymmetric-moe.md), [`concepts/fsdp2.md`](concepts/fsdp2.md), [`concepts/dual-optimizers.md`](concepts/dual-optimizers.md), [`concepts/mtp.md`](concepts/mtp.md) — nav wired, learning paths extended. Two code-truth corrections appended to existing docs (stale DenseFFN claim and flat-MTP description in [`concepts/gdn-and-mla.md`](concepts/gdn-and-mla.md); FSDP wiring status in [`concepts/optimization.md`](concepts/optimization.md)) and recorded as findings F5/F6 in [`AUDIT.md`](AUDIT.md). Gate: 22 docs, 249 anchors; resolution/coverage/links PASS (see the audit's verification table).
 - **2026-08-20 — Wave-1 docs upgrade.** `scripts/check_docs.py` ported
   (adds `--coverage` over all public symbols in the 19 shipped modules),
   citation gaps closed, [`guides/learning-paths.md`](guides/learning-paths.md),
@@ -92,6 +98,20 @@ mechanisms, while implementation notes call out deliberate plan/code differences
   added; nav wired. See the audit for findings and measured numbers.
 - **2026-08-05 — canonical documentation layout.** `learning_docs/`
   (6 chapters) and the process docs (`PHASE_1_DELIVERY.md`, `HyMo-Roadmap.md`, `docs/superpowers/`) were removed. The corpus was consolidated into the canonical layout above. The roadmap's 2-line status: Phase 1–4 implementation shipped (with the 2026-08-04 cleanup trimming test-only `eval/`/`ablations/`/data-pipeline modules), the 30B-token pre-training run remains the v1.0 milestone.
+
+## Corpus size (measured `wc -w`, 2026-09-21)
+
+| Scope | Words |
+|---|---|
+| `docs/` total (all markdown) | 75,796 |
+| — `docs/concepts/` | 59,663 |
+| — topic-focus docs added 2026-09-21 (`hybrid-ratio` 961, `asymmetric-moe` 898, `dual-optimizers` 978, `fsdp2` 905, `mtp` 807) | 4,549 |
+| — `docs/references/` | 4,270 |
+| — `docs/guides/` | 2,073 |
+| — `training.md` | 7,964 |
+| — `README.md` + `AUDIT.md` (docs/) | 1,826 |
+| Top-level trio (`README.md` 1,624 / `AGENTS.md` 962 / `SKILLS.md` 519) | 3,105 |
+| **Whole corpus (docs/ + trio)** | **78,901** |
 
 ## Test counts (live, not historical)
 

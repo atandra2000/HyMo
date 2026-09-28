@@ -108,19 +108,9 @@ build it by default. Follow this exact style for every test:
 
 ## Concise-comments rule
 
-Docstrings and inline comments must justify non-obvious code, not
-restate it. Verifiable targets per file:
-- **Public function docstring:** ≤ 3 lines, or one short paragraph.
-- **Module docstring:** ≤ 6 lines.
-- **Inline comment density:** ≤ 1 comment per ~10 lines of code on
-  average; comments that say what the next line does (`# compute x`,
-  `# loop over rows`) are forbidden.
-- **Section banners** (`# ---- ... ----`) are reserved for the top
-  level of a file (≤ 3 per file) and inside kernels to delimit
-  named algorithm phases.
-
-Violations are reviewable on `wc -l <file>` and
-`grep -c '^[[:space:]]*#' <file>`.
+Comments justify non-obvious code; they never restate the next line. The
+canonical, verifiable targets are in `../AGENTS.md` §Cross-project
+engineering invariants — do not restate them here.
 
 ## Hard don'ts
 

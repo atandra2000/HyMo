@@ -14,6 +14,7 @@
 | 3 | [`references/config.md`](../references/config.md) | How YAML becomes a frozen `src/hymo/core/config.py:HyMoConfig`; every field, every invariant (`src/hymo/core/config_validation.py:validate_full_config`). |
 | 4 | [`concepts/model-architecture.md`](../concepts/model-architecture.md) | Line-by-line walkthrough of `src/hymo/models/`: `HyMo`, `MLABlock`, `GatedDeltaNetBlock`, `DeepSeekMoE`, `MultiTokenPrediction`. |
 | 5 | [`guides/glossary.md`](glossary.md) | The vocabulary used everywhere else — keep it open while reading. |
+| 6 | [`concepts/hybrid-ratio.md`](../concepts/hybrid-ratio.md) | Why every 4th layer is MLA: what GDN buys vs MLA, and how the 3:1 mix is derived from one config number. |
 
 **Landmark check:** you can explain why every 4th layer is MLA (positions
 0, 4, …, 28) and what `tie_embeddings` does to `src/hymo/models/model.py:HyMo`.
@@ -27,6 +28,9 @@
 | 3 | [`concepts/optimization.md`](../concepts/optimization.md) | NorMuon vs CautiousAdamW, the WSD schedule, FSDP-2, initialization. |
 | 4 | [`training.md`](../training.md) §Training Pipeline | `src/hymo/training/trainer.py:Trainer`, the parameter partition (`src/hymo/training/partition.py:ParameterPartition`), WSD phases, DCP checkpointing. |
 | 5 | [`references/api.md`](../references/api.md) | The public surface at a glance — model factory, trainer, checkpoints. |
+| 6 | [`concepts/asymmetric-moe.md`](../concepts/asymmetric-moe.md) | The MoE placement (8 of 32 layers) and 16+1/top-2 configuration, with the stored-vs-active budget. |
+| 7 | [`concepts/dual-optimizers.md`](../concepts/dual-optimizers.md) | Ground truth on NorMuon + CautiousAdamW: the partition rules, RMS matching, FP32 masters, trainer wiring. |
+| 8 | [`concepts/mtp.md`](../concepts/mtp.md) | The chained MTP heads: objective, loss weights, trainer wiring, zero inference cost. |
 
 **Landmark check:** you can say which optimizer receives the embedding
 matrix and why (`goes_to_adamw`), and what changes at `warmup_frac` /
@@ -43,6 +47,7 @@ matrix and why (`goes_to_adamw`), and what changes at `warmup_frac` /
 | 4 | [`training.md`](../training.md) §Checkpointing | `src/hymo/training/checkpoint.py:CheckpointState` + DCP resumability, RNG capture. |
 | 5 | [`references/config.md`](../references/config.md) §Deriving | `src/hymo/core/config.py:derive_config` for ablation variants without mutating the frozen base. |
 | 6 | `tests/` | The testing rules: tiny-config defaults, `@pytest.mark.heavy` for the 1.13 B construct, gates (`mypy --strict`, `ruff`). |
+| 7 | [`concepts/fsdp2.md`](../concepts/fsdp2.md) | Full-sharding mechanics, block-level sharding units, per-rank memory derivation — and the honest wiring status (F5). |
 
 **Landmark check:** you can explain the Triton contract (opt-in,
 `HAS_TRITON`, no silent fallback), where validation loss enters

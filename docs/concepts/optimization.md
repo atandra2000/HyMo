@@ -1112,3 +1112,14 @@ Activation memory grows linearly with `B * T * dim`; bumping `micro_batch_size` 
 - [training.md](../training.md) — the trainer loop, parameter partition, and checkpointing.
 - [config.md](../references/config.md) — the `OptimizerConfig` / `SchedulerConfig` / `TrainingConfig` fields.
 - Source: `src/hymo/training/optimizer.py`, `src/hymo/training/scheduler.py`, `src/hymo/training/fsdp.py`, `src/hymo/training/partition.py`, `src/hymo/training/trainer.py`, `src/hymo/models/moe.py`, `src/hymo/models/gdn.py`, `src/hymo/models/model.py`.
+
+## Correction (2026-09-21)
+
+The FSDP-2 section above says full sharding "is gated by `training.fsdp =
+True`". Code truth: nothing in `src/hymo/training/trainer.py` calls
+`src/hymo/training/fsdp.py:wrap_model_with_fsdp`, and
+`src/hymo/core/config.py:TrainingConfig.fsdp` is a declared-but-unread knob
+in `src/` (only `fsdp_mixed_precision` is consumed). The wrapper, the
+block-level auto-wrap policy, and their unit tests exist and pass; the
+trainer call site does not. Full accounting and the per-rank memory
+derivation: [`fsdp2.md`](fsdp2.md) and AUDIT finding F5.

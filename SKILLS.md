@@ -42,7 +42,7 @@ base = load_config("configs/hymo_750m.yaml")
 ablation = derive_config(base, moe_routed_experts=8)  # dataclasses.replace-based
 ```
 
-Config variants derive via `hymo.core.config.derive_config` (the in-repo `ablations/` package was removed in the 2026-08-04 cleanup).
+Config variants derive via `hymo.core.config.derive_config`. There is no in-repo `ablations/` package.
 
 ## Skill 4: Launch FSDP-2 pretraining
 
@@ -78,12 +78,10 @@ Resume from an arbitrary step via `trainer.load("checkpoints/pretrain/step_N")`.
 HyMo uses its own BPE-64k + 256-byte tokenizer (vocab 64,256 — see
 `src/hymo/data/tokenizer.py::ExtendedTokenizer`).
 
-> **Note (2026-08-04 cleanup):** the 10 streaming source loaders
-> (`sources.py`), the shard writer (`sharding.py`), and `data_config.py`
-> were removed from the repo — they were consumed only by tests. The
-> trainer consumes a raw `data_iter`; the data-preparation pipeline lives
-> in the workspace `LLM/shared_data/` package. The validation binary is
-> built by `src/hymo/data/prepare_validation.py` and read by
+> There are no streaming source loaders, shard writer, or `data_config.py`
+> in this repo. The trainer consumes a raw `data_iter`; the data-preparation
+> pipeline lives in the workspace `LLM/shared_data/` package. The validation
+> binary is built by `src/hymo/data/prepare_validation.py` and read by
 > `compute_validation_loss` in `src/hymo/training/validation.py`.
 
 After changing the mixture or tokenizer, rebuild shards in
@@ -99,5 +97,4 @@ run.
 4. Enable NaN-step skipping in `TrainingConfig`; inspect W&B for the first
    bad step and roll back to the prior DCP checkpoint.
 
-Cross-reference: `.agents/skills/llm-architecture/SKILL.md` (GDN, MLA, MoE, MTP)
-and `DeepSeek-v3-Lite/docs/concepts/attention-and-precision.md` for MLA absorption details reused in HyMo.
+Cross-reference: `DeepSeek-v3-Lite/docs/concepts/attention-and-precision.md` for MLA absorption details reused in HyMo.

@@ -53,3 +53,4 @@ wandb/
 outputs/
 results/
 docs_html/
+.claude/

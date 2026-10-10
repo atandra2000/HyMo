@@ -94,23 +94,24 @@
         var flashEffect = 0;
 
         var PALETTE = {
-            paperBg: '#0e0c0a',
-            paperCenter: '#181410',
-            gridRule: 'rgba(58, 50, 38, 0.45)',
-            gridAxis: 'rgba(201, 163, 92, 0.35)',
-            unitCircle: 'rgba(201, 163, 92, 0.22)',
-            olive: '#9a9440',
-            oliveGlow: 'rgba(154, 148, 64, 0.65)',
-            oliveTint: 'rgba(154, 148, 64, 0.15)',
-            terracotta: '#e07a3f',
-            terracottaGlow: 'rgba(224, 122, 63, 0.65)',
-            terracottaTint: 'rgba(224, 122, 63, 0.15)',
-            gold: '#c9a35c',
-            goldGlow: 'rgba(201, 163, 92, 0.7)',
-            coreHot: '#fffaf0',
-            ink: '#d8ccb4',
-            inkSoft: '#b3a68c',
-            inkFaint: '#7a7160'
+            paperBg: '#FFFFFF',
+            paperCenter: '#F5F6F6',
+            gridRule: 'rgba(120, 129, 138, 0.45)',
+            gridAxis: 'rgba(31, 74, 115, 0.25)',
+            unitCircle: 'rgba(31, 74, 115, 0.18)',
+            olive: '#5C6B5F',
+            oliveGlow: 'rgba(92, 107, 95, 0.55)',
+            oliveTint: 'rgba(92, 107, 95, 0.12)',
+            terracotta: '#1F4A73',
+            terracottaGlow: 'rgba(31, 74, 115, 0.55)',
+            terracottaTint: 'rgba(31, 74, 115, 0.10)',
+            gold: '#8A6A2E',
+            goldGlow: 'rgba(138, 106, 46, 0.6)',
+            goldTint: 'rgba(138, 106, 46, 0.12)',
+            coreHot: '#16191D',
+            ink: '#16191D',
+            inkSoft: '#4B5359',
+            inkFaint: '#78818A'
         };
 
         var shockwaves = [];
@@ -321,7 +322,7 @@
         // Draw Radar Dial & Concentric Grid
         function drawDialAndGrid(t) {
             ctx.save();
-            ctx.strokeStyle = 'rgba(58, 50, 38, 0.35)';
+            ctx.strokeStyle = 'rgba(120, 129, 138, 0.35)';
             ctx.lineWidth = 1;
 
             // Cardinal Crosshairs
@@ -348,16 +349,16 @@
                 ctx.beginPath();
                 ctx.moveTo(x0, y0);
                 ctx.lineTo(x1, y1);
-                ctx.strokeStyle = isMajor ? PALETTE.gold : (isMedium ? PALETTE.gridAxis : 'rgba(58, 50, 38, 0.45)');
+                ctx.strokeStyle = isMajor ? PALETTE.gold : (isMedium ? PALETTE.gridAxis : 'rgba(120, 129, 138, 0.45)');
                 ctx.lineWidth = isMajor ? 1.5 : 1;
                 ctx.stroke();
             }
 
             // Concentric boundary circles
             var rings = [
-                { r: radius * 0.35, style: 'rgba(224, 122, 63, 0.35)', dash: [4, 4], label: 'O(1) STATE HORIZON' },
-                { r: radius * 0.65, style: 'rgba(154, 148, 64, 0.35)', dash: [2, 6], label: 'RECURRENCE MANIFOLD' },
-                { r: radius * 0.88, style: 'rgba(201, 163, 92, 0.28)', dash: [], label: '16-HEAD RECURRENCE ORBIT' }
+                { r: radius * 0.35, style: 'rgba(31, 74, 115, 0.35)', dash: [4, 4], label: 'O(1) STATE HORIZON' },
+                { r: radius * 0.65, style: 'rgba(92, 107, 95, 0.35)', dash: [2, 6], label: 'RECURRENCE MANIFOLD' },
+                { r: radius * 0.88, style: 'rgba(138, 106, 46, 0.28)', dash: [], label: '16-HEAD RECURRENCE ORBIT' }
             ];
 
             rings.forEach(function (ring) {
@@ -391,9 +392,9 @@
             // 1. Central Recurrent State Core S_t
             var pulse = Math.sin(t * 2.4) * 0.08 + 1.0 + (flashEffect * 0.2);
             var coreGrad = ctx.createRadialGradient(cx, cy, 2, cx, cy, stateR * pulse);
-            coreGrad.addColorStop(0, 'rgba(224, 122, 63, 0.45)');
-            coreGrad.addColorStop(0.5, 'rgba(201, 163, 92, 0.20)');
-            coreGrad.addColorStop(1, 'rgba(14, 12, 10, 0)');
+            coreGrad.addColorStop(0, 'rgba(31, 74, 115, 0.45)');
+            coreGrad.addColorStop(0.5, 'rgba(138, 106, 46, 0.20)');
+            coreGrad.addColorStop(1, 'rgba(255, 255, 255, 0)');
             ctx.beginPath();
             ctx.arc(cx, cy, stateR * pulse, 0, Math.PI * 2);
             ctx.fillStyle = coreGrad;
@@ -429,8 +430,8 @@
                 ctx.moveTo(hx, hy);
                 ctx.lineTo(cx, cy);
                 ctx.strokeStyle = (h % 2 === 0) ?
-                    'rgba(224, 122, 63, ' + Math.min(1, beamAlpha).toFixed(2) + ')' :
-                    'rgba(154, 148, 64, ' + Math.min(1, beamAlpha).toFixed(2) + ')';
+                    'rgba(31, 74, 115, ' + Math.min(1, beamAlpha).toFixed(2) + ')' :
+                    'rgba(92, 107, 95, ' + Math.min(1, beamAlpha).toFixed(2) + ')';
                 ctx.lineWidth = 1.2;
                 ctx.stroke();
 
@@ -439,7 +440,7 @@
                 ctx.arc(hx, hy, 4.5, 0, Math.PI * 2);
                 ctx.fillStyle = (h % 2 === 0) ? PALETTE.terracotta : PALETTE.olive;
                 ctx.fill();
-                ctx.strokeStyle = '#fff';
+                ctx.strokeStyle = '#16191D';
                 ctx.lineWidth = 1;
                 ctx.stroke();
 
@@ -488,9 +489,9 @@
             // 1. Central 128d Latent KV Manifold Core
             var pulse = Math.sin(t * 2.4) * 0.08 + 1.0;
             var coreGrad = ctx.createRadialGradient(cx, cy, 2, cx, cy, latentR * pulse);
-            coreGrad.addColorStop(0, 'rgba(154, 148, 64, 0.45)');
-            coreGrad.addColorStop(0.5, 'rgba(201, 163, 92, 0.20)');
-            coreGrad.addColorStop(1, 'rgba(14, 12, 10, 0)');
+            coreGrad.addColorStop(0, 'rgba(92, 107, 95, 0.45)');
+            coreGrad.addColorStop(0.5, 'rgba(138, 106, 46, 0.20)');
+            coreGrad.addColorStop(1, 'rgba(255, 255, 255, 0)');
             ctx.beginPath();
             ctx.arc(cx, cy, latentR * pulse, 0, Math.PI * 2);
             ctx.fillStyle = coreGrad;
@@ -528,7 +529,7 @@
                 ctx.beginPath();
                 ctx.moveTo(qx, qy);
                 ctx.lineTo(kvX, kvY);
-                ctx.strokeStyle = 'rgba(224, 122, 63, ' + Math.min(1, beamAlpha).toFixed(2) + ')';
+                ctx.strokeStyle = 'rgba(31, 74, 115, ' + Math.min(1, beamAlpha).toFixed(2) + ')';
                 ctx.lineWidth = 1.2;
                 ctx.stroke();
 
@@ -546,7 +547,7 @@
                 ctx.arc(qx, qy, 4.5, 0, Math.PI * 2);
                 ctx.fillStyle = PALETTE.terracotta;
                 ctx.fill();
-                ctx.strokeStyle = '#fff';
+                ctx.strokeStyle = '#16191D';
                 ctx.lineWidth = 1;
                 ctx.stroke();
 
@@ -582,8 +583,8 @@
             // Central Shared Expert
             var sharedR = radius * 0.26;
             var sharedGrad = ctx.createRadialGradient(cx, cy, 2, cx, cy, sharedR);
-            sharedGrad.addColorStop(0, 'rgba(201, 163, 92, 0.45)');
-            sharedGrad.addColorStop(1, 'rgba(14, 12, 10, 0)');
+            sharedGrad.addColorStop(0, 'rgba(138, 106, 46, 0.45)');
+            sharedGrad.addColorStop(1, 'rgba(255, 255, 255, 0)');
             ctx.beginPath();
             ctx.arc(cx, cy, sharedR, 0, Math.PI * 2);
             ctx.fillStyle = sharedGrad;
@@ -617,7 +618,7 @@
                     ctx.beginPath();
                     ctx.moveTo(cx, cy);
                     ctx.lineTo(ex, ey);
-                    ctx.strokeStyle = 'rgba(224, 122, 63, ' + Math.min(1, beamAlpha).toFixed(2) + ')';
+                    ctx.strokeStyle = 'rgba(31, 74, 115, ' + Math.min(1, beamAlpha).toFixed(2) + ')';
                     ctx.lineWidth = 2.0;
                     ctx.stroke();
 
@@ -642,12 +643,12 @@
                 var biasVal = (Math.sin(e * 1.3 + t * 0.8) * 0.4 + 0.5);
                 ctx.beginPath();
                 ctx.arc(ex, ey, 8.5, angle - Math.PI * 0.4, angle - Math.PI * 0.4 + biasVal * Math.PI * 0.8);
-                ctx.strokeStyle = isActive ? PALETTE.gold : 'rgba(154, 148, 64, 0.5)';
+                ctx.strokeStyle = isActive ? PALETTE.gold : 'rgba(92, 107, 95, 0.5)';
                 ctx.lineWidth = 1.5;
                 ctx.stroke();
 
                 // Label
-                ctx.fillStyle = isActive ? '#ffffff' : PALETTE.inkFaint;
+                ctx.fillStyle = isActive ? '#16191D' : PALETTE.inkFaint;
                 ctx.font = (isActive ? 'bold 8.5px' : '7.5px') + ' "JetBrains Mono", monospace';
                 ctx.textAlign = 'center';
                 var labelR = expertR + (isActive ? 16 : 14);
@@ -693,7 +694,7 @@
             // Root Main Token
             ctx.beginPath();
             ctx.arc(rootX, rootY, 26, 0, Math.PI * 2);
-            ctx.fillStyle = 'rgba(224, 122, 63, 0.25)';
+            ctx.fillStyle = 'rgba(31, 74, 115, 0.25)';
             ctx.fill();
             ctx.strokeStyle = PALETTE.terracotta;
             ctx.lineWidth = 2;
@@ -710,7 +711,7 @@
             // Draft 1
             ctx.beginPath();
             ctx.arc(d1X, d1Y, 22, 0, Math.PI * 2);
-            ctx.fillStyle = 'rgba(154, 148, 64, 0.25)';
+            ctx.fillStyle = 'rgba(92, 107, 95, 0.25)';
             ctx.fill();
             ctx.strokeStyle = PALETTE.olive;
             ctx.lineWidth = 2;
@@ -727,7 +728,7 @@
             // Draft 2
             ctx.beginPath();
             ctx.arc(d2X, d2Y, 18, 0, Math.PI * 2);
-            ctx.fillStyle = 'rgba(201, 163, 92, 0.25)';
+            ctx.fillStyle = 'rgba(138, 106, 46, 0.25)';
             ctx.fill();
             ctx.strokeStyle = PALETTE.gold;
             ctx.lineWidth = 2;
@@ -760,7 +761,7 @@
                 ctx.beginPath();
                 ctx.moveTo(cx, cy);
                 ctx.lineTo(lx, ly);
-                ctx.strokeStyle = isMLA ? 'rgba(154, 148, 64, 0.35)' : 'rgba(224, 122, 63, 0.20)';
+                ctx.strokeStyle = isMLA ? 'rgba(92, 107, 95, 0.35)' : 'rgba(31, 74, 115, 0.20)';
                 ctx.lineWidth = isMLA ? 1.5 : 0.8;
                 ctx.stroke();
 
@@ -794,7 +795,7 @@
             var grad = ctx.createRadialGradient(cx, cy, 0, cx, cy, radius * 1.35);
             grad.addColorStop(0, PALETTE.paperCenter);
             grad.addColorStop(0.65, PALETTE.paperBg);
-            grad.addColorStop(1, '#070605');
+            grad.addColorStop(1, '#FFFFFF');
             ctx.fillStyle = grad;
             ctx.fillRect(0, 0, width, height);
 
@@ -901,23 +902,20 @@
         var simTime = 0;
 
         var PALETTE = {
-            paperBg: '#0e0c0a',
-            paperStation: '#161310',
-            paperStationHover: '#1c1813',
-            rule: '#2c261c',
-            ruleStrong: '#3a3226',
-            terracotta: '#e07a3f',
-            terracottaGlow: 'rgba(224, 122, 63, 0.75)',
-            terracottaTint: 'rgba(224, 122, 63, 0.16)',
-            olive: '#9a9440',
-            oliveGlow: 'rgba(154, 148, 64, 0.75)',
-            oliveTint: 'rgba(154, 148, 64, 0.16)',
-            gold: '#c9a35c',
-            goldGlow: 'rgba(201, 163, 92, 0.85)',
-            goldTint: 'rgba(201, 163, 92, 0.20)',
-            ink: '#d8ccb4',
-            inkSoft: '#b3a68c',
-            inkFaint: '#7a7160'
+            paperBg: '#FFFFFF',
+            paperStation: '#F4F5F5',
+            paperStationHover: '#EDEFEF',
+            rule: '#E1E5E6',
+            ruleStrong: '#D2D7D9',
+            terracotta: '#1F4A73',
+            terracottaGlow: 'rgba(31, 74, 115, 0.4)',
+            olive: '#5C6B5F',
+            oliveGlow: 'rgba(92, 107, 95, 0.4)',
+            gold: '#8A6A2E',
+            goldGlow: 'rgba(138, 106, 46, 0.45)',
+            ink: '#16191D',
+            inkSoft: '#4B5359',
+            inkFaint: '#78818A'
         };
 
         var STAGES = [
@@ -1175,7 +1173,7 @@
             ctx.fillRect(0, 0, width, height);
 
             ctx.save();
-            ctx.strokeStyle = 'rgba(58, 50, 38, 0.22)';
+            ctx.strokeStyle = 'rgba(120, 129, 138,0.22)';
             ctx.lineWidth = 1;
             ctx.setLineDash([2, 8]);
             for (var x = 20; x < width; x += 40) {
@@ -1191,7 +1189,7 @@
             ctx.beginPath();
             ctx.moveTo(14, fwdY);
             ctx.lineTo(width - 14, fwdY);
-            ctx.strokeStyle = 'rgba(224, 122, 63, 0.28)';
+            ctx.strokeStyle = 'rgba(31, 74, 115,0.28)';
             ctx.lineWidth = 1.5;
             ctx.setLineDash([4, 6]);
             ctx.stroke();
@@ -1201,7 +1199,7 @@
             ctx.beginPath();
             ctx.moveTo(14, bwdY);
             ctx.lineTo(width - 14, bwdY);
-            ctx.strokeStyle = 'rgba(154, 148, 64, 0.28)';
+            ctx.strokeStyle = 'rgba(92, 107, 95,0.28)';
             ctx.lineWidth = 1.5;
             ctx.setLineDash([4, 6]);
             ctx.stroke();
@@ -1241,7 +1239,7 @@
                     ctx.beginPath();
                     ctx.moveTo(px, py);
                     ctx.lineTo(px - 14 * p.speed, py);
-                    ctx.strokeStyle = 'rgba(224, 122, 63, 0.35)';
+                    ctx.strokeStyle = 'rgba(31, 74, 115,0.35)';
                     ctx.lineWidth = p.size * 0.7;
                     ctx.stroke();
                 });
@@ -1264,7 +1262,7 @@
                     ctx.beginPath();
                     ctx.moveTo(px, py);
                     ctx.lineTo(px + 14 * p.speed, py);
-                    ctx.strokeStyle = 'rgba(154, 148, 64, 0.35)';
+                    ctx.strokeStyle = 'rgba(92, 107, 95,0.35)';
                     ctx.lineWidth = p.size * 0.7;
                     ctx.stroke();
                 });
@@ -1284,7 +1282,7 @@
 
                 ctx.beginPath();
                 ctx.arc(ap.x, ap.y, 2.0 * ap.life, 0, Math.PI * 2);
-                ctx.fillStyle = 'rgba(201, 163, 92, ' + ap.life.toFixed(2) + ')';
+                ctx.fillStyle = 'rgba(138, 106, 46,' + ap.life.toFixed(2) + ')';
                 ctx.fill();
             }
 
@@ -1324,18 +1322,18 @@
                 var isHover = isHovered && (mouseX >= st.x && mouseX <= st.x + st.w && mouseY >= st.y && mouseY <= st.y + st.h);
                 if (isHover) closest = st;
 
-                var cardBg = isHover ? PALETTE.paperStationHover : PALETTE.paperStation;
+                var cardBg = isHover ? 'rgba(237, 239, 239,0.98)' : PALETTE.paperStation;
                 var borderColor = PALETTE.ruleStrong;
 
                 if (st.glowAdam > 0.1) {
                     borderColor = PALETTE.gold;
-                    cardBg = 'rgba(201, 163, 92, ' + (0.15 * st.glowAdam).toFixed(2) + ')';
+                    cardBg = 'rgba(138, 106, 46,' + (0.15 * st.glowAdam).toFixed(2) + ')';
                 } else if (st.glowForward > 0.1) {
                     borderColor = PALETTE.terracotta;
-                    cardBg = 'rgba(224, 122, 63, ' + (0.14 * st.glowForward).toFixed(2) + ')';
+                    cardBg = 'rgba(31, 74, 115,' + (0.14 * st.glowForward).toFixed(2) + ')';
                 } else if (st.glowBackward > 0.1) {
                     borderColor = PALETTE.olive;
-                    cardBg = 'rgba(154, 148, 64, ' + (0.14 * st.glowBackward).toFixed(2) + ')';
+                    cardBg = 'rgba(92, 107, 95,' + (0.14 * st.glowBackward).toFixed(2) + ')';
                 }
 
                 ctx.fillStyle = cardBg;
@@ -1373,6 +1371,19 @@
                 var displayBadge = isCompact ? '0' + st.stage.id : st.stage.badge;
                 var displayTitle = isCompact ? (st.stage.id === 1 ? 'Embed' : st.stage.id === 2 ? 'GDN' : st.stage.id === 3 ? 'MLA' : st.stage.id === 4 ? 'MoE' : st.stage.id === 5 ? 'Loss' : 'DualOpt') : st.stage.title;
 
+                function drawFitText(text, fontSize, isBold, color, yPos) {
+                    var curSize = fontSize;
+                    ctx.font = (isBold ? 'bold ' : '') + curSize + 'px "JetBrains Mono", monospace';
+                    var maxTextW = st.w - 10;
+                    while (ctx.measureText(text).width > maxTextW && curSize > 6.5) {
+                        curSize -= 0.5;
+                        ctx.font = (isBold ? 'bold ' : '') + curSize + 'px "JetBrains Mono", monospace';
+                    }
+                    ctx.fillStyle = color;
+                    ctx.textAlign = 'center';
+                    ctx.fillText(text, st.cx, yPos);
+                }
+
                 // Stage Number Badge
                 ctx.font = isCompact ? 'bold 7.5px "JetBrains Mono", monospace' : 'bold 8.5px "JetBrains Mono", monospace';
                 ctx.fillStyle = (st.glowForward > 0.2 ? PALETTE.terracotta : (st.glowBackward > 0.2 ? PALETTE.olive : PALETTE.inkSoft));
@@ -1380,30 +1391,22 @@
                 ctx.fillText(displayBadge, st.x + (isCompact ? 13 : 14), st.y + 13);
 
                 // Stage Title
-                ctx.font = isCompact ? 'bold 9px "JetBrains Mono", monospace' : 'bold 10px "JetBrains Mono", monospace';
-                ctx.fillStyle = isHover ? '#ffffff' : PALETTE.ink;
-                ctx.textAlign = 'center';
-                ctx.fillText(displayTitle, st.cx, st.y + st.h * 0.40);
+                drawFitText(displayTitle, isHover ? 10.5 : (isCompact ? 9 : 10), true, isHover ? PALETTE.terracotta : PALETTE.ink, st.y + st.h * 0.40);
 
                 // Subtitle
                 if (st.h > 80) {
-                    ctx.font = isCompact ? '7.5px "JetBrains Mono", monospace' : '8.5px "JetBrains Mono", monospace';
-                    ctx.fillStyle = PALETTE.gold;
-                    ctx.fillText(st.stage.sub, st.cx, st.y + st.h * 0.60);
+                    drawFitText(st.stage.sub, isHover ? 9 : (isCompact ? 7.5 : 8.5), isHover, isHover ? '#8A6A2E' : PALETTE.gold, st.y + st.h * 0.60);
                 }
 
                 // Chip Tag
                 if (st.h > 100 && !isCompact) {
-                    ctx.font = '8px "JetBrains Mono", monospace';
-                    ctx.fillStyle = PALETTE.inkSoft;
-                    ctx.fillText(st.stage.chip, st.cx, st.y + st.h * 0.78);
+                    drawFitText(st.stage.chip, isHover ? 8.5 : 8, isHover, isHover ? '#16191D' : PALETTE.inkSoft, st.y + st.h * 0.78);
                 }
 
-                // Re-compute Checkpoint Tag during Backward
-                if (st.glowBackward > 0.3 && (idx >= 1 && idx <= 4)) {
-                    ctx.fillStyle = PALETTE.olive;
-                    ctx.font = 'bold 7px "JetBrains Mono", monospace';
-                    ctx.fillText('RE-COMPUTE', st.cx, st.y + st.h - 6);
+                if ((isHover || st.glowBackward > 0.3) && (idx >= 1 && idx <= 4)) {
+                    drawFitText('RE-COMPUTE', 8, true, isHover ? '#8A6A2E' : PALETTE.olive, st.y + st.h - 6);
+                } else if (st.glowAdam > 0.3) {
+                    drawFitText('θ UPDATE', 8, true, PALETTE.gold, st.y + st.h - 6);
                 }
             });
 
@@ -1504,7 +1507,7 @@
                     setTimeout(function () {
                         if (gdnMatchText) {
                             gdnMatchText.textContent = txt;
-                            gdnMatchText.style.color = '#9a9440';
+                            gdnMatchText.style.color = '#5C6B5F';
                         }
                     }, 200 + i * 220);
                 });
@@ -1512,7 +1515,7 @@
                 setTimeout(function () {
                     if (gdnMatchText) {
                         gdnMatchText.textContent = 'VERIFIED (< 1e-6 max |Δ| match)';
-                        gdnMatchText.style.color = '#9a9440';
+                        gdnMatchText.style.color = '#5C6B5F';
                     }
                     gdnVerifyBtn.textContent = original;
                     gdnVerifyBtn.disabled = false;
@@ -1656,7 +1659,7 @@
 
                 if (mtpStatusText) {
                     mtpStatusText.textContent = accepted ? 'ACCEPTED (3 Tokens / Step)' : 'PARTIAL (2 Tokens / Step)';
-                    mtpStatusText.style.color = accepted ? '#9a9440' : '#e07a3f';
+                    mtpStatusText.style.color = accepted ? '#5C6B5F' : '#1F4A73';
                 }
                 if (mtpSpeedText) {
                     mtpSpeedText.textContent = accepted ? '2.00× effective speedup' : '1.50× effective speedup';
@@ -1693,7 +1696,7 @@
         navigator.clipboard.writeText(code.innerText).then(function () {
             var orig = btn.textContent;
             btn.textContent = 'Copied!';
-            btn.style.color = '#e07a3f';
+            btn.style.color = '#1F4A73';
             setTimeout(function () {
                 btn.textContent = orig;
                 btn.style.color = '';

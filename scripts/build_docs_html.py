@@ -5,9 +5,13 @@ Converts project markdown files into a responsive, beautifully-styled HTML docum
 with full LaTeX math (KaTeX) and syntax highlighting support.
 Output directory: docs_html/ (ignored by git).
 
-Design system: the "dark bench notebook" — espresso-graphite paper, warm-bone
-ink, terracotta + olive marks, one mono voice. Shares its lineage with the
-sibling DeepSeek-v3-Lite, LLaMA-3-Lite, and Mamba-3-Lite portals. See `assets/style.css`.
+Design system: the "printed reader" — cool white paper, blue-black ink, one
+ink-blue accent, Literata for prose and IBM Plex Mono for code and measured
+values. See `assets/style.css`.
+
+The portal is a book. `DOC_FILES` below is the single source of truth for its
+chapter list and reading order; the sidebar, the index page and the
+previous/next links are all derived from it.
 """
 
 import html
@@ -22,41 +26,85 @@ from pathlib import Path
 WORKSPACE_DIR = Path(__file__).resolve().parent.parent
 OUTPUT_DIR = WORKSPACE_DIR / "docs_html"
 
+DEFAULT_PUBLISH_BRANCH = "main"
+
+
 DOC_FILES = [
-    # (relative_path_from_root, category, display_title)
-    ("README.md", "Core", "Project Overview (README)"),
-    ("AGENTS.md", "Core", "AGENTS & System Architecture"),
-    ("SKILLS.md", "Core", "Skills Reference"),
-    ("docs/README.md", "Core", "Documentation Index"),
-    ("docs/training.md", "Core", "Training Architecture & Pipeline"),
+    # (relative_path, part, chapter_title, card_blurb)
+    # Order matters: it is the reading order for the sidebar, the index page
+    # and the previous/next links at the foot of every chapter.
 
-    # Concepts
-    ("docs/concepts/model-architecture.md", "Concepts", "Model Architecture Walkthrough"),
-    ("docs/concepts/gdn-and-mla.md", "Concepts", "GDN & MLA Mechanism Deep-Dive"),
-    ("docs/concepts/optimization.md", "Concepts", "Optimization Quartet (NorMuon, WSD, FSDP-2)"),
-    ("docs/concepts/kernels.md", "Concepts", "Operations & Triton Kernels"),
-    ("docs/concepts/design.md", "Concepts", "v1.0 Architecture & Design Spec"),
+    # Part I — Foundations
+    ("README.md", "Part I: Foundations", "Overview",
+     "The project in one page: a 434M-active / 1.13B-stored GDN + MLA hybrid, "
+     "the asymmetric MoE, and how to run it."),
+    ("docs/README.md", "Part I: Foundations", "How to read this book",
+     "What each chapter covers, where to start, and the map from source file "
+     "to chapter."),
+    ("AGENTS.md", "Part I: Foundations", "Repository contract",
+     "Codebase contracts, Triton rules, typing invariants, and architectural "
+     "limits."),
+    ("SKILLS.md", "Part I: Foundations", "Skills reference",
+     "Agent tooling, scripts, and the competencies the repo ships with."),
 
-    # Guides
-    ("docs/guides/quickstart.md", "Guides", "Quickstart — From Zero to a Running Loop"),
+    # Part II — The model
+    ("docs/concepts/model-architecture.md", "Part II: The model",
+     "Model architecture walkthrough",
+     "Line-by-line tour of model.py: GDN blocks, MLA blocks, DeepSeekMoE, MTP "
+     "heads, and partial RoPE."),
+    ("docs/concepts/gdn-and-mla.md", "Part II: The model",
+     "GDN and MLA mechanisms",
+     "The linear-attention delta rule, latent KV compression, and the 3:1 "
+     "hybrid stack thesis."),
+    ("docs/concepts/optimization.md", "Part II: The model",
+     "The optimization quartet",
+     "NorMuon for 2D matrices, Cautious AdamW elsewhere, WSD schedule, and "
+     "FSDP-2 sharding."),
+    ("docs/concepts/kernels.md", "Part II: The model",
+     "Operations and Triton kernels",
+     "The hand-written Triton GDN kernel: fused 1D selective scan with "
+     "chunked recurrence."),
+    ("docs/concepts/design.md", "Part II: The model",
+     "v1.0 design spec",
+     "The complete architectural specification, scaling decisions, and "
+     "validation criteria."),
 
-    # References
-    ("docs/references/config.md", "References", "Typed Config Reference"),
-    ("docs/references/api.md", "References", "Public API Reference"),
+    # Part III — The training run
+    ("docs/training.md", "Part III: The training run",
+     "The training pipeline",
+     "FSDP-2 sharding, the NorMuon + AdamW dual optimizer, the WSD schedule, "
+     "and DCP checkpointing."),
+    ("docs/guides/quickstart.md", "Part III: The training run",
+     "Quickstart",
+     "From zero to a running forward pass: install, smoke tests, gates, and "
+     "the training loop."),
+
+    # Part IV — Reference
+    ("docs/references/config.md", "Part IV: Reference", "Typed config reference",
+     "ModelConfig, OptimizerConfig, SchedulerConfig, and every validation "
+     "rule."),
+    ("docs/references/api.md", "Part IV: Reference", "Public API reference",
+     "The model interface, Trainer, optimizers, schedulers, and factory "
+     "entry points."),
 ]
 
-# Premium-polish assets: mono-only font link, boot overlay, widget containers.
+# Chapters published as portal pages. A markdown link that resolves to a file
+# outside this set is rewritten to its GitHub source URL instead of a page
+# that was never generated.
+PUBLISHED_MD = {rel for rel, *_ in DOC_FILES}
+
 FONT_LINK = ('<link href="https://fonts.googleapis.com/css2?'
-             'family=IBM+Plex+Mono:ital,wght@0,400;0,500;0,600;0,700;1,400'
-             '&family=JetBrains+Mono:ital,wght@0,400;0,500;0,600;0,700;1,400'
+             'family=Literata:ital,opsz,wght@0,7..72,400;0,7..72,500;'
+             '0,7..72,600;0,7..72,700;1,7..72,400'
+             '&family=IBM+Plex+Mono:ital,wght@0,400;0,500;0,600;0,700;1,400'
              '&display=swap" rel="stylesheet">')
 
 BOOT_OVERLAY_HTML = (
     '<div id="boot-overlay" aria-hidden="true">'
     '<div class="boot-inner">'
-    '<div class="boot-wordmark">HYMO</div>'
-    '<div class="boot-line">loading weights '
-    '<span class="boot-bar">[░░░░░░░░░░░░] 0%</span>'
+    '<div class="boot-wordmark">HyMo</div>'
+    '<div class="boot-line">Loading the notes'
+    '<span class="boot-bar"></span>'
     '</div></div></div>'
 )
 
@@ -81,7 +129,7 @@ HEAD_TEMPLATE = """<!DOCTYPE html>
     <meta charset="UTF-8">
     <meta name="viewport" content="width=device-width, initial-scale=1.0">
     <title>{title}</title>
-    <!-- Fonts — secondary mono voice for headings/numerics, JetBrains for body. -->
+    <!-- Fonts — Literata for prose, IBM Plex Mono for code and data. -->
     <link rel="preconnect" href="https://fonts.googleapis.com">
     <link rel="preconnect" href="https://fonts.gstatic.com" crossorigin>
     {font_link}
@@ -93,7 +141,7 @@ HEAD_TEMPLATE = """<!DOCTYPE html>
 """
 
 DOC_EXTRA_HEAD = """    <!-- Highlight.js for Syntax Highlighting -->
-    <link rel="stylesheet" href="https://cdnjs.cloudflare.com/ajax/libs/highlight.js/11.9.0/styles/github-dark.min.css">
+    <link rel="stylesheet" href="https://cdnjs.cloudflare.com/ajax/libs/highlight.js/11.9.0/styles/github.min.css">
     <script src="https://cdnjs.cloudflare.com/ajax/libs/highlight.js/11.9.0/highlight.min.js"></script>
     <!-- KaTeX for LaTeX Math -->
     <link rel="stylesheet" href="https://cdn.jsdelivr.net/npm/katex@0.16.9/dist/katex.min.css">
@@ -159,6 +207,28 @@ WIDGET_CONTAINERS = {
 }
 
 
+# Tags the portal renders from raw markdown HTML. Anything outside this set is
+# dropped rather than passed through, so a doc can never inject script.
+RAW_ALLOWED_TAGS = {
+    'div', 'p', 'span', 'a', 'img', 'br', 'hr', 'em', 'strong', 'b', 'i',
+    'code', 'pre', 'ul', 'ol', 'li', 'table', 'thead', 'tbody', 'tr', 'th',
+    'td', 'details', 'summary', 'figure', 'figcaption', 'sup', 'sub', 'kbd',
+    'small', 'abbr', 'del', 'ins', 'u',
+}
+# Attributes kept per tag. `style` is deliberately absent: raw inline styles
+# would override the design system's tokens.
+RAW_ALLOWED_ATTRS = {
+    '*': {'class', 'id', 'title', 'align', 'width', 'height', 'colspan', 'rowspan'},
+    'a': {'href', 'target', 'rel'},
+    'img': {'src', 'alt', 'loading', 'decoding'},
+    'td': {'align'},
+    'th': {'align', 'scope'},
+    'abbr': {'title'},
+}
+RAW_VOID_TAGS = {'br', 'hr', 'img'}
+_RAW_TAG_RE = re.compile(r'<\s*(/?)\s*([a-zA-Z][a-zA-Z0-9-]*)((?:\s+[^<>]*?)?)\s*(/?)\s*>')
+
+
 def slugify(text: str) -> str:
     """Generate clean HTML id for headings matching GitHub anchor conventions."""
     text = text.lower().strip()
@@ -190,6 +260,63 @@ def github_base_url() -> str:
     return f"{out}/blob/{branch}" if branch else ""
 
 
+@lru_cache(maxsize=1)
+def github_raw_base_url() -> str:
+    """Raw-content twin of `github_base_url`, for <img src> that must render
+    rather than open an HTML blob page."""
+    blob_base = github_base_url()
+    if not blob_base:
+        return ""
+    return blob_base.replace("https://github.com/", "https://raw.githubusercontent.com/").replace("/blob/", "/")
+
+
+def resolve_asset_src(src: str, src_rel_path: str) -> str:
+    """Point an <img src> at something that actually renders.
+
+    The build ships no PNGs, so a repo-relative path becomes a raw GitHub URL.
+    Absolute URLs and data URIs pass through untouched.
+    """
+    src = src.strip()
+    if not src or src.startswith(("http://", "https://", "data:", "//", "#")):
+        return src
+    raw_base = github_raw_base_url()
+    if not raw_base:
+        return src
+    src_dir = WORKSPACE_DIR / Path(src_rel_path).parent
+    candidate = (src_dir / src).resolve()
+    try:
+        repo_rel = candidate.relative_to(WORKSPACE_DIR).as_posix()
+    except ValueError:
+        return src
+    return f"{raw_base}/{repo_rel}"
+
+
+def resolve_raw_href(href: str, src_rel_path: str) -> str:
+    """Resolve an href inside a raw HTML island (fix_md_links never sees these)."""
+    href = href.strip()
+    if not href or href.startswith(("http://", "https://", "mailto:", "#")):
+        return href
+    path_part, _, anchor = href.partition("#")
+    src_dir = WORKSPACE_DIR / Path(src_rel_path).parent
+    if path_part.endswith(".md"):
+        for candidate in (src_dir / path_part, WORKSPACE_DIR / path_part):
+            if candidate.exists():
+                try:
+                    repo_rel = candidate.resolve().relative_to(WORKSPACE_DIR)
+                except ValueError:
+                    continue
+                rel = os.path.relpath(WORKSPACE_DIR / repo_rel, src_dir).replace(os.sep, '/')
+                return rel[:-3] + ".html" + (f"#{anchor}" if anchor else "")
+    repo_base = github_base_url()
+    if repo_base:
+        try:
+            repo_rel = (src_dir / path_part).resolve().relative_to(WORKSPACE_DIR)
+            return f"{repo_base}/{repo_rel}" + (f"#{anchor}" if anchor else "")
+        except ValueError:
+            pass
+    return href
+
+
 def fix_md_links(content: str, src_rel_path: str) -> str:
     """Rewrite relative markdown links for the HTML build."""
     repo_base = github_base_url()
@@ -213,6 +340,13 @@ def fix_md_links(content: str, src_rel_path: str) -> str:
                     repo_rel = cand_root
                 else:
                     repo_rel = Path(src_rel_path).parent / path_part
+            repo_rel_posix = repo_rel.as_posix()
+            if repo_rel_posix not in PUBLISHED_MD:
+                # Not a chapter: point at the source file rather than at a
+                # page the build never generates.
+                if repo_base:
+                    return f"[{label}]({repo_base}/{repo_rel_posix})"
+                return f"[{label}]({url})"
             rel = os.path.relpath(WORKSPACE_DIR / repo_rel, src_dir).replace(os.sep, '/')
             target = rel[:-3] + ".html"
             if anchor:
@@ -226,7 +360,9 @@ def fix_md_links(content: str, src_rel_path: str) -> str:
                 pass
         return f"[{label}]({url})"
 
-    return re.sub(r'\[([^\]]+)\]\(([^)]+)\)', link_replacer, content)
+    # `(?<!!)` keeps markdown images out of the link rewriter: their src is an
+    # asset path, not a page to navigate to.
+    return re.sub(r'(?<!!)\[([^\]]+)\]\(([^)]+)\)', link_replacer, content)
 
 
 def parse_markdown_to_html(md_text: str, src_rel_path: str) -> tuple[str, list[dict]]:
@@ -344,6 +480,14 @@ def parse_markdown_to_html(md_text: str, src_rel_path: str) -> tuple[str, list[d
 
     def render_inline_formatting(text: str) -> str:
         text = escape_preserving_entities(text)
+        # Images before links: `[![alt](src)](href)` is a linked badge, and the
+        # link regex would otherwise swallow the inner image markup.
+        text = re.sub(
+            r'!\[([^\]]*)\]\(([^)\s]+)(?:\s+"[^"]*")?\)',
+            lambda m: f'<img class="md-img" src="{html.escape(resolve_asset_src(m.group(2), src_rel_path), quote=True)}"'
+                      f' alt="{html.escape(m.group(1), quote=True)}" loading="lazy" decoding="async">',
+            text,
+        )
         text = re.sub(r'\*\*([^*]+)\*\*', r'<strong>\1</strong>', text)
         text = re.sub(r'\*([^*]+)\*', r'<em>\1</em>', text)
         text = re.sub(r'~~([^~]+)~~', r'<del>\1</del>', text)
@@ -355,7 +499,7 @@ def parse_markdown_to_html(md_text: str, src_rel_path: str) -> tuple[str, list[d
         line = lines[i]
         stripped = line.strip()
 
-        if stripped.startswith("___DISPLAYMATH_"):
+        if stripped.startswith("___DISPLAYMATH_") or stripped.startswith("___CODEBLOCK_"):
             flush_table()
             flush_list()
             flush_blockquote()
@@ -555,6 +699,586 @@ def parse_markdown_to_html(md_text: str, src_rel_path: str) -> tuple[str, list[d
     return full_html, toc
 
 
+def sanitize_raw_html(raw: str, src_rel_path: str, format_text=None) -> str:
+    """Filter a raw HTML island down to the portal's tag/attribute allowlist.
+
+    Relative `src`/`href` are rewritten so they resolve from `docs_html/`,
+    where the referenced images and sibling docs do not exist on disk.
+    `format_text` formats the text nodes between tags, so markdown emphasis
+    inside a passthrough island still renders.
+    """
+    out = []
+    pos = 0
+    for m in _RAW_TAG_RE.finditer(raw):
+        chunk = raw[pos:m.start()]
+        out.append(format_text(chunk) if format_text else html.escape(chunk, quote=False))
+        pos = m.end()
+
+        closing, tag, attrs_raw, self_closing = m.group(1), m.group(2).lower(), m.group(3) or '', m.group(4)
+        if tag not in RAW_ALLOWED_TAGS:
+            continue
+        if closing:
+            out.append(f'</{tag}>')
+            continue
+
+        allowed = RAW_ALLOWED_ATTRS['*'] | RAW_ALLOWED_ATTRS.get(tag, set())
+        kept = []
+        for name, value in re.findall(r'([a-zA-Z-]+)\s*=\s*"([^"]*)"', attrs_raw):
+            name = name.lower()
+            if name not in allowed:
+                continue
+            if tag == 'img' and name == 'src':
+                value = resolve_asset_src(html.unescape(value), src_rel_path)
+            elif tag == 'a' and name == 'href':
+                value = resolve_raw_href(html.unescape(value), src_rel_path)
+                if 'target' in attrs_raw.lower() and 'rel' not in attrs_raw.lower():
+                    kept.append(('rel', 'noopener noreferrer'))
+            elif tag == 'a' and name == 'target' and value not in ('_blank', '_self'):
+                continue
+            kept.append((name, html.escape(value, quote=True)))
+
+        attr_str = ''.join(f' {n}="{v}"' for n, v in kept)
+        # Void tags stay self-closing; a self-closing allowlisted tag is
+        # normalized to an open/close pair so following siblings stay balanced.
+        if tag not in RAW_VOID_TAGS and self_closing:
+            out.append(f'<{tag}{attr_str}></{tag}>')
+        else:
+            out.append(f'<{tag}{attr_str}>')
+    tail = raw[pos:]
+    out.append(format_text(tail) if format_text else html.escape(tail, quote=False))
+    return ''.join(out)
+
+
+def looks_like_raw_html_block(text: str) -> bool:
+    """True when a paragraph's opening line is a real HTML island, not prose.
+
+    Prose like "a < b and c > d" must stay escaped text; a line whose first
+    tag is allowlisted HTML is a passthrough block.
+    """
+    stripped = text.strip()
+    if not stripped.startswith('<'):
+        return False
+    m = _RAW_TAG_RE.match(stripped)
+    if not m:
+        return False
+    return m.group(2).lower() in RAW_ALLOWED_TAGS
+
+
+@lru_cache(maxsize=1)
+def github_base_url() -> str:
+    """Derive the GitHub blob base (https://github.com/<owner>/<repo>/blob/<branch>).
+
+    The branch is the published default, not the checked-out one: the site is
+    deployed from `main`, so a build on a feature branch or worktree must still
+    link to content that actually exists on GitHub. `DOCS_PUBLISH_BRANCH`
+    overrides.
+    """
+    try:
+        out = subprocess.run(
+            ["git", "remote", "get-url", "origin"],
+            capture_output=True, text=True, check=True, cwd=WORKSPACE_DIR,
+        ).stdout.strip()
+        out = out.replace("git@github.com:", "https://github.com/").removesuffix(".git")
+        if not out.startswith("https://github.com/"):
+            return ""
+    except Exception:
+        return ""
+
+    branch = os.environ.get("DOCS_PUBLISH_BRANCH")
+    explicit = branch is not None
+    if not explicit:
+        branch = DEFAULT_PUBLISH_BRANCH
+    try:
+        head = subprocess.run(
+            ["git", "rev-parse", "--abbrev-ref", "HEAD"],
+            capture_output=True, text=True, check=True, cwd=WORKSPACE_DIR,
+        ).stdout.strip()
+        default_branch = subprocess.run(
+            ["git", "symbolic-ref", "--quiet", "refs/remotes/origin/HEAD"],
+            capture_output=True, text=True, cwd=WORKSPACE_DIR,
+        ).stdout.strip().removesuffix("/HEAD").split("/")[-1]
+    except Exception:
+        head = default_branch = ""
+    # A local build of the published branch is exact; anything else falls back
+    # to the remote default so links never point at an unpushed branch. An
+    # explicit override always wins.
+    if not explicit and head and head != branch and default_branch:
+        branch = default_branch
+    return f"{out}/blob/{branch}" if branch else ""
+
+
+@lru_cache(maxsize=1)
+def github_raw_base_url() -> str:
+    """Raw-content twin of `github_base_url`, for <img src> that must render
+    rather than open an HTML blob page."""
+    blob_base = github_base_url()
+    if not blob_base:
+        return ""
+    return blob_base.replace("https://github.com/", "https://raw.githubusercontent.com/").replace("/blob/", "/")
+
+
+def resolve_asset_src(src: str, src_rel_path: str) -> str:
+    """Point an <img src> at something that actually renders.
+
+    The build ships no PNGs, so a repo-relative path becomes a raw GitHub URL.
+    Absolute URLs and data URIs pass through untouched.
+    """
+    src = src.strip()
+    if not src or src.startswith(("http://", "https://", "data:", "//", "#")):
+        return src
+    raw_base = github_raw_base_url()
+    if not raw_base:
+        return src
+    src_dir = WORKSPACE_DIR / Path(src_rel_path).parent
+    candidate = (src_dir / src).resolve()
+    try:
+        repo_rel = candidate.relative_to(WORKSPACE_DIR).as_posix()
+    except ValueError:
+        return src
+    return f"{raw_base}/{repo_rel}"
+
+
+def resolve_raw_href(href: str, src_rel_path: str) -> str:
+    """Resolve an href inside a raw HTML island (fix_md_links never sees these)."""
+    href = href.strip()
+    if not href or href.startswith(("http://", "https://", "mailto:", "#")):
+        return href
+    path_part, _, anchor = href.partition("#")
+    src_dir = WORKSPACE_DIR / Path(src_rel_path).parent
+    if path_part.endswith(".md"):
+        for candidate in (src_dir / path_part, WORKSPACE_DIR / path_part):
+            if candidate.exists():
+                try:
+                    repo_rel = candidate.resolve().relative_to(WORKSPACE_DIR)
+                except ValueError:
+                    continue
+                rel = os.path.relpath(WORKSPACE_DIR / repo_rel, src_dir).replace(os.sep, '/')
+                return rel[:-3] + ".html" + (f"#{anchor}" if anchor else "")
+    repo_base = github_base_url()
+    if repo_base:
+        try:
+            repo_rel = (src_dir / path_part).resolve().relative_to(WORKSPACE_DIR)
+            return f"{repo_base}/{repo_rel}" + (f"#{anchor}" if anchor else "")
+        except ValueError:
+            pass
+    return href
+
+
+def fix_md_links(content: str, src_rel_path: str) -> str:
+    """Rewrite relative markdown links for the HTML build."""
+    repo_base = github_base_url()
+    src_dir = WORKSPACE_DIR / Path(src_rel_path).parent
+
+    def link_replacer(match):
+        label = match.group(1)
+        url = match.group(2)
+        if url.startswith(("http://", "https://", "mailto:", "#")):
+            return f"[{label}]({url})"
+        path_part, _, anchor = url.partition("#")
+        if path_part.endswith(".md"):
+            if path_part.startswith("/"):
+                repo_rel = Path(path_part[1:])
+            else:
+                cand_src = src_dir / path_part
+                cand_root = WORKSPACE_DIR / path_part
+                if cand_src.exists():
+                    repo_rel = cand_src.resolve().relative_to(WORKSPACE_DIR)
+                elif cand_root.exists():
+                    repo_rel = cand_root
+                else:
+                    repo_rel = Path(src_rel_path).parent / path_part
+            repo_rel_posix = repo_rel.as_posix()
+            if repo_rel_posix not in PUBLISHED_MD:
+                # Not a chapter: point at the source file rather than at a
+                # page the build never generates.
+                if repo_base:
+                    return f"[{label}]({repo_base}/{repo_rel_posix})"
+                return f"[{label}]({url})"
+            rel = os.path.relpath(WORKSPACE_DIR / repo_rel, src_dir).replace(os.sep, '/')
+            target = rel[:-3] + ".html"
+            if anchor:
+                target += "#" + anchor
+            return f"[{label}]({target})"
+        if repo_base and not path_part.startswith("/"):
+            try:
+                repo_rel = (src_dir / path_part).resolve().relative_to(WORKSPACE_DIR)
+                return f"[{label}]({repo_base}/{repo_rel})"
+            except ValueError:
+                pass
+        return f"[{label}]({url})"
+
+    # `(?<!!)` keeps markdown images out of the link rewriter: their src is an
+    # asset path, not a page to navigate to.
+    return re.sub(r'(?<!!)\[([^\]]+)\]\(([^)]+)\)', link_replacer, content)
+
+
+def parse_markdown_to_html(md_text: str, src_rel_path: str) -> tuple[str, list[dict]]:
+    """Statically convert markdown to rich HTML structure with full LaTeX & Math protection.
+
+    Returns (html_content, toc_items).
+    """
+    md_text = fix_md_links(md_text, src_rel_path)
+
+    # STEP 1: Protect Code Blocks & Inline Code
+    code_blocks = []
+    def store_code_block(m):
+        code_blocks.append(m.group(0))
+        return f"\n\n___CODEBLOCK_{len(code_blocks)-1}___\n\n"
+
+    md_text = re.sub(r'```[\s\S]*?```', store_code_block, md_text)
+
+    inline_codes = []
+    def store_inline_code(m):
+        inline_codes.append(m.group(0))
+        return f"___INLINECODE_{len(inline_codes)-1}___"
+
+    md_text = re.sub(r'`[^`\n]+`', store_inline_code, md_text)
+
+    # STEP 2: Protect LaTeX Math Blocks & Inline Math
+    display_maths = []
+    def store_display_math(m):
+        inner = m.group(1).strip()
+        safe_math = html.escape(inner, quote=False)
+        display_maths.append(f'<div class="math-block">$$\n{safe_math}\n$$</div>')
+        return f"\n\n___DISPLAYMATH_{len(display_maths)-1}___\n\n"
+
+    md_text = re.sub(r'\$\$([\s\S]+?)\$\$', store_display_math, md_text)
+    md_text = re.sub(r'\\\[([\s\S]+?)\\\]', store_display_math, md_text)
+
+    inline_maths = []
+    def store_inline_math(m):
+        inner = m.group(1).strip()
+        safe_math = html.escape(inner, quote=False)
+        inline_maths.append(f'<span class="math-inline">${safe_math}$</span>')
+        return f"___INLINEMATH_{len(inline_maths)-1}___"
+
+    md_text = re.sub(r'(?<!\$)\$([^\$\n]+?)\$(?!\$)', store_inline_math, md_text)
+    md_text = re.sub(r'\\\(([\s\S]+?)\\\)', store_inline_math, md_text)
+
+    # STEP 3: Parse Document Structure Line by Line
+    toc = []
+    seen_slugs = {}
+    lines = md_text.splitlines()
+    html_lines = []
+    in_table = False
+    table_headers = []
+    table_rows = []
+
+    list_stack = []
+    h1_seen = False
+
+    in_blockquote = False
+    blockquote_type = "normal"
+    blockquote_lines = []
+
+    def close_li():
+        nonlocal list_stack
+        if list_stack and list_stack[-1]['li_open']:
+            html_lines.append("</li>")
+            list_stack[-1]['li_open'] = False
+
+    def flush_list():
+        nonlocal list_stack
+        while list_stack:
+            close_li()
+            html_lines.append(f"</{list_stack[-1]['tag']}>")
+            list_stack.pop()
+
+    def flush_blockquote():
+        nonlocal in_blockquote, blockquote_type, blockquote_lines
+        if in_blockquote:
+            content = "<br>".join(blockquote_lines)
+            if blockquote_type != "normal":
+                title = blockquote_type.upper()
+                icon = {"NOTE": "ℹ️", "TIP": "💡", "IMPORTANT": "📌", "WARNING": "⚠️", "CAUTION": "🚨"}.get(title, "ℹ️")
+                html_lines.append(
+                    f'<div class="callout callout-{blockquote_type.lower()}">'
+                    f'<div class="callout-header"><span class="callout-icon">{icon}</span><span class="callout-title">{title}</span></div>'
+                    f'<div class="callout-body">{content}</div>'
+                    f'</div>'
+                )
+            else:
+                html_lines.append(f'<blockquote>{content}</blockquote>')
+            in_blockquote = False
+            blockquote_type = "normal"
+            blockquote_lines = []
+
+    def flush_table():
+        nonlocal in_table, table_headers, table_rows
+        if in_table:
+            th_html = "".join(f"<th>{h}</th>" for h in table_headers)
+            tr_html = ""
+            for row in table_rows:
+                td_html = "".join(f"<td>{c}</td>" for c in row)
+                tr_html += f"<tr>{td_html}</tr>"
+            html_lines.append(
+                f'<div class="table-container"><table class="doc-table">'
+                f'<thead><tr>{th_html}</tr></thead>'
+                f'<tbody>{tr_html}</tbody>'
+                f'</table></div>'
+            )
+            in_table = False
+            table_headers = []
+            table_rows = []
+
+    def escape_preserving_entities(text: str) -> str:
+        text = re.sub(r'&(?!(?:[a-zA-Z][a-zA-Z0-9]*|#[0-9]+|#x[0-9a-fA-F]+);)', '&amp;', text)
+        return text.replace('<', '&lt;').replace('>', '&gt;')
+
+    def render_inline_formatting(text: str) -> str:
+        text = escape_preserving_entities(text)
+        # Images before links: `[![alt](src)](href)` is a linked badge, and the
+        # link regex would otherwise swallow the inner image markup.
+        text = re.sub(
+            r'!\[([^\]]*)\]\(([^)\s]+)(?:\s+"[^"]*")?\)',
+            lambda m: f'<img class="md-img" src="{html.escape(resolve_asset_src(m.group(2), src_rel_path), quote=True)}"'
+                      f' alt="{html.escape(m.group(1), quote=True)}" loading="lazy" decoding="async">',
+            text,
+        )
+        text = re.sub(r'\*\*([^*]+)\*\*', r'<strong>\1</strong>', text)
+        text = re.sub(r'\*([^*]+)\*', r'<em>\1</em>', text)
+        text = re.sub(r'~~([^~]+)~~', r'<del>\1</del>', text)
+        text = re.sub(r'\[([^\]]+)\]\(([^)]+)\)', r'<a href="\2" class="doc-link">\1</a>', text)
+        return text
+
+    i = 0
+    while i < len(lines):
+        line = lines[i]
+        stripped = line.strip()
+
+        if stripped.startswith("___DISPLAYMATH_") or stripped.startswith("___CODEBLOCK_"):
+            flush_table()
+            flush_list()
+            flush_blockquote()
+            html_lines.append(stripped)
+            i += 1
+            continue
+
+        if not stripped:
+            flush_table()
+            flush_list()
+            flush_blockquote()
+            i += 1
+            continue
+
+        # Blockquote or Callout
+        if stripped.startswith(">"):
+            flush_table()
+            flush_list()
+            bq_content = stripped.lstrip(">").strip()
+            callout_match = re.match(r'^\[\!(NOTE|TIP|IMPORTANT|WARNING|CAUTION)\]', bq_content, re.IGNORECASE)
+            if callout_match:
+                in_blockquote = True
+                blockquote_type = callout_match.group(1).upper()
+                remaining = bq_content[callout_match.end():].strip()
+                if remaining:
+                    blockquote_lines.append(render_inline_formatting(remaining))
+            else:
+                if not in_blockquote:
+                    in_blockquote = True
+                    blockquote_type = "normal"
+                if bq_content:
+                    blockquote_lines.append(render_inline_formatting(bq_content))
+            i += 1
+            continue
+
+        # Horizontal Rule
+        if re.match(r'^(---|\*\*\*|___)\s*$', stripped):
+            flush_table()
+            flush_list()
+            flush_blockquote()
+            html_lines.append("<hr class='doc-hr'>")
+            i += 1
+            continue
+
+        # Headings
+        heading_match = re.match(r'^(#{1,6})\s+(.+)$', stripped)
+        if heading_match:
+            flush_table()
+            flush_list()
+            flush_blockquote()
+            level = len(heading_match.group(1))
+            heading_text_raw = heading_match.group(2).strip()
+
+            clean_title = re.sub(r'\[([^\]]+)\]\([^)]+\)', r'\1', heading_text_raw)
+            clean_title = re.sub(r'`([^`]+)`', r'\1', clean_title)
+            clean_title = re.sub(r'___INLINECODE_\d+___', '', clean_title)
+            clean_title = re.sub(r'___INLINEMATH_\d+___', '', clean_title)
+            raw_slug = slugify(clean_title)
+            if raw_slug in seen_slugs:
+                seen_slugs[raw_slug] += 1
+                heading_id = f"{raw_slug}-{seen_slugs[raw_slug]}"
+            else:
+                seen_slugs[raw_slug] = 0
+                heading_id = raw_slug
+            rendered_heading = render_inline_formatting(heading_text_raw)
+
+            if level in (2, 3):
+                toc.append({'level': level, 'title': clean_title, 'id': heading_id})
+
+            if level == 1 and not h1_seen:
+                h1_seen = True
+                html_lines.append(f'<span class="doc-anchor" id="{heading_id}"></span>')
+            else:
+                html_lines.append(
+                    f'<h{level} id="{heading_id}" class="heading-anchor">'
+                    f'{rendered_heading}'
+                    f'<a href="#{heading_id}" class="anchor-link" aria-label="Link to section">#</a>'
+                    f'</h{level}>'
+                )
+            i += 1
+            continue
+
+        # Markdown Table Detection
+        if "|" in line and i + 1 < len(lines) and re.match(r'^\s*\|?\s*:?---', lines[i + 1].strip()):
+            flush_list()
+            flush_blockquote()
+            in_table = True
+            headers_raw = [c.strip() for c in line.strip().strip("|").split("|")]
+            table_headers = [render_inline_formatting(h) for h in headers_raw]
+            i += 2
+
+            while i < len(lines) and "|" in lines[i] and lines[i].strip():
+                cells_raw = [c.strip() for c in lines[i].strip().strip("|").split("|")]
+                table_rows.append([render_inline_formatting(c) for c in cells_raw])
+                i += 1
+            flush_table()
+            continue
+
+        # Lists
+        ul_match = re.match(r'^[\*\-]\s+(.+)$', stripped)
+        ol_match = re.match(r'^\d+\.\s+(.+)$', stripped)
+        if ul_match or ol_match:
+            flush_table()
+            flush_blockquote()
+            tag = 'ul' if ul_match else 'ol'
+            item_text = (ul_match or ol_match).group(1).strip()
+            indent = len(line) - len(line.lstrip(' '))
+
+            while list_stack and indent < list_stack[-1]['indent']:
+                close_li()
+                html_lines.append(f"</{list_stack[-1]['tag']}>")
+                list_stack.pop()
+            if list_stack and list_stack[-1]['indent'] == indent and list_stack[-1]['tag'] != tag:
+                close_li()
+                html_lines.append(f"</{list_stack[-1]['tag']}>")
+                list_stack.pop()
+            if not list_stack or list_stack[-1]['indent'] != indent:
+                list_stack.append({'indent': indent, 'tag': tag, 'li_open': False})
+                html_lines.append(f'<{tag} class="doc-list">')
+            else:
+                close_li()
+
+            task_match = re.match(r'^\[([ xX])\]\s+(.+)$', item_text)
+            if task_match:
+                checked = 'checked' if task_match.group(1).lower() == 'x' else ''
+                item_content = render_inline_formatting(task_match.group(2))
+                html_lines.append(f'<li class="task-item"><input type="checkbox" disabled {checked}> {item_content}')
+            else:
+                html_lines.append(f'<li>{render_inline_formatting(item_text)}')
+            list_stack[-1]['li_open'] = True
+            i += 1
+            continue
+
+        # Continuation of an open list item
+        if list_stack and list_stack[-1]['li_open'] and line[:1] in (' ', '\t'):
+            html_lines.append("<br> " + render_inline_formatting(stripped))
+            i += 1
+            continue
+
+        # Raw HTML island. CommonMark ends an HTML block at the first blank
+        # line, which is what lets `<div align="center">` wrap markdown: the
+        # tag is its own block and the prose inside is still parsed below.
+        if looks_like_raw_html_block(stripped):
+            flush_table()
+            flush_list()
+            flush_blockquote()
+            block_lines = [line]
+            j = i + 1
+            while j < len(lines) and lines[j].strip():
+                block_lines.append(lines[j])
+                j += 1
+            i = j
+            html_lines.append(sanitize_raw_html(
+                '\n'.join(block_lines), src_rel_path, format_text=render_inline_formatting))
+            continue
+
+        # Raw HTML island. CommonMark ends an HTML block at the first blank
+        # line, which is what lets `<div align="center">` wrap markdown: the
+        # tag is its own block and the prose inside is still parsed below.
+        if looks_like_raw_html_block(stripped):
+            flush_table()
+            flush_list()
+            flush_blockquote()
+            block_lines = [line]
+            j = i + 1
+            while j < len(lines) and lines[j].strip():
+                block_lines.append(lines[j])
+                j += 1
+            i = j
+            html_lines.append(sanitize_raw_html(
+                '\n'.join(block_lines), src_rel_path, format_text=render_inline_formatting))
+            continue
+
+        # Standard Paragraph
+        flush_table()
+        flush_list()
+        flush_blockquote()
+        html_lines.append(f'<p>{render_inline_formatting(stripped)}</p>')
+        i += 1
+
+    flush_table()
+    flush_list()
+    flush_blockquote()
+
+    full_html = "\n".join(html_lines)
+
+    # STEP 4: Restore Protected Tokens
+    for idx, math_html in enumerate(inline_maths):
+        full_html = full_html.replace(f"___INLINEMATH_{idx}___", math_html)
+
+    for idx, raw_code in enumerate(inline_codes):
+        code_content = raw_code[1:-1]
+        code_html = f'<code class="inline-code">{html.escape(code_content)}</code>'
+        full_html = full_html.replace(f"___INLINECODE_{idx}___", code_html)
+
+    for idx, math_html in enumerate(display_maths):
+        full_html = full_html.replace(f"___DISPLAYMATH_{idx}___", math_html)
+
+    for idx, raw_block in enumerate(code_blocks):
+        lines_b = raw_block.splitlines()
+        first_line = lines_b[0].strip()
+        code_lang = first_line.lstrip("```").strip().lower()
+        code_content = "\n".join(lines_b[1:-1])
+        escaped_content = html.escape(code_content)
+
+        lang_attr = f' class="language-{code_lang}"' if code_lang else ''
+        data_lang = code_lang if code_lang else 'code'
+
+        n_lines = len(lines_b) - 2
+        collapsed = n_lines > 14
+        wrapper_cls = 'code-wrapper collapsed' if collapsed else 'code-wrapper'
+        expand_btn = (
+            f'<button class="expand-btn" data-label="expand ▾ · {n_lines} lines" '
+            f'onclick="toggleCode(this)">expand ▾ · {n_lines} lines</button>'
+            if collapsed else ''
+        )
+
+        block_html = (
+            f'<div class="{wrapper_cls}" data-lines="{n_lines}">'
+            f'<div class="code-header">'
+            f'<span class="code-lang">{data_lang}</span>'
+            f'<span class="code-actions">{expand_btn}'
+            f'<button class="copy-btn" onclick="copyCode(this)">Copy</button></span>'
+            f'</div>'
+            f'<pre><code{lang_attr}>{escaped_content}</code></pre>'
+            f'</div>'
+        )
+        full_html = full_html.replace(f"___CODEBLOCK_{idx}___", block_html)
+
+    return full_html, toc
+
+
 def compute_rel_prefix(target_rel_path: str) -> str:
     """Calculate relative path back to root docs_html directory."""
     parts = Path(target_rel_path).parts
@@ -564,31 +1288,25 @@ def compute_rel_prefix(target_rel_path: str) -> str:
 
 
 def build_sidebar_html(current_rel_path: str, rel_prefix: str) -> str:
-    """Build the navigation sidebar HTML."""
-    sidebar_sections = {
-        "Core": [],
-        "Concepts": [],
-        "Guides": [],
-        "References": []
-    }
+    """Build the navigation sidebar HTML matching sibling layout."""
+    sidebar_sections: dict[str, list[str]] = {}
 
-    for rel_path, category, display_title in DOC_FILES:
+    for rel_path, part, display_title, _blurb in DOC_FILES:
         target_html_rel = rel_path.replace(".md", ".html")
         href = rel_prefix + target_html_rel
         is_active = (rel_path == current_rel_path)
         active_cls = "active" if is_active else ""
-        sidebar_sections[category].append(
+        sidebar_sections.setdefault(part, []).append(
             f'<li class="nav-item"><a href="{href}" class="nav-link {active_cls}" title="{display_title}"><span class="nav-link-text">{display_title}</span></a></li>'
         )
 
     html_out = ['<div class="sidebar-search"><input type="text" id="navSearch" placeholder="Search docs..." onkeyup="filterNav()"></div>']
 
-    for cat_name, items in sidebar_sections.items():
-        if items:
-            html_out.append('<div class="nav-group">')
-            html_out.append(f'<div class="nav-group-title">{cat_name}</div>')
-            html_out.append(f'<ul class="nav-list">{"".join(items)}</ul>')
-            html_out.append('</div>')
+    for part, items in sidebar_sections.items():
+        html_out.append('<div class="nav-group">')
+        html_out.append(f'<div class="nav-group-title">{part}</div>')
+        html_out.append(f'<ul class="nav-list">{"".join(items)}</ul>')
+        html_out.append('</div>')
 
     return "\n".join(html_out)
 
@@ -606,7 +1324,7 @@ def build_toc_html(toc_items: list[dict]) -> str:
     return f'<ul class="toc-list">{"".join(toc_links)}</ul>'
 
 
-def generate_html_page(rel_path: str, category: str, display_title: str):
+def generate_html_page(rel_path: str, part: str, display_title: str):
     """Generate single HTML file for a markdown document."""
     src_file = WORKSPACE_DIR / rel_path
     if not src_file.exists():
@@ -615,8 +1333,8 @@ def generate_html_page(rel_path: str, category: str, display_title: str):
 
     md_text = src_file.read_text(encoding="utf-8")
 
-    word_count = len(md_text.split())
-    reading_time = max(1, round(word_count / 200))
+    word_count = len(re.findall(r'\b\w+\b', md_text))
+    reading_time = max(1, round(word_count / 220))
 
     html_body, toc_items = parse_markdown_to_html(md_text, rel_path)
 
@@ -625,9 +1343,14 @@ def generate_html_page(rel_path: str, category: str, display_title: str):
     toc_html = build_toc_html(toc_items)
     widget_html = WIDGET_CONTAINERS.get(rel_path, "")
 
-    current_idx = next((i for i, df in enumerate(DOC_FILES) if df[0] == rel_path), 0)
-    prev_doc = DOC_FILES[current_idx - 1] if current_idx > 0 else None
-    next_doc = DOC_FILES[current_idx + 1] if current_idx < len(DOC_FILES) - 1 else None
+    curr_idx = -1
+    for idx, (p, _, _, _) in enumerate(DOC_FILES):
+        if p == rel_path:
+            curr_idx = idx
+            break
+
+    prev_doc = DOC_FILES[curr_idx - 1] if curr_idx > 0 else None
+    next_doc = DOC_FILES[curr_idx + 1] if 0 <= curr_idx < len(DOC_FILES) - 1 else None
 
     prev_html = ""
     if prev_doc:
@@ -674,15 +1397,15 @@ def generate_html_page(rel_path: str, category: str, display_title: str):
         <main class="main-content">
             <div class="content-container">
                 <div class="breadcrumb">
-                    <a href="{rel_prefix}index.html">Docs</a> &gt; <span>{category}</span> &gt; <span class="current">{display_title}</span>
+                    <a href="{rel_prefix}index.html">Docs</a> &gt; <span>{part}</span> &gt; <span class="current">{display_title}</span>
                 </div>
 
                 <div class="doc-header">
                     <h1 class="doc-title">{display_title}</h1>
                     <div class="doc-meta">
-                        <span class="meta-item"><span class="meta-label">source</span><span class="meta-val">{rel_path}</span></span>
-                        <span class="meta-item"><span class="meta-label">words</span><span class="meta-val">{word_count:,}</span></span>
-                        <span class="meta-item"><span class="meta-label">read</span><span class="meta-val">~{reading_time} min</span></span>
+                        <span class="meta-item">{rel_path}</span>
+                        <span class="meta-item">{word_count:,} words</span>
+                        <span class="meta-item">~{reading_time} min read</span>
                     </div>
                 </div>
 
@@ -742,51 +1465,32 @@ def generate_index_portal():
     """Generate interactive index.html home portal."""
     sidebar_html = build_sidebar_html("index.html", "./")
 
-    categories = {
-        ("CORE", "Core Architecture"): [
-            ("README.html", "README", "Project Overview", "434M-active / 1.13B-stored hybrid language model: GDN × MLA with Asymmetric MoE."),
-            ("AGENTS.html", "AGENTS", "System Architecture", "Codebase contracts, Triton rules, typing invariants & architectural limits."),
-            ("SKILLS.html", "SKILLS", "Skills Map", "Specialized agent tools, scripts, and domain competencies."),
-            ("docs/README.html", "DOCS", "Documentation Index", "A map of the concepts, guides, and API references in this portal."),
-            ("docs/training.html", "TRAIN", "Training Pipeline", "FSDP-2 sharding, NorMuon + AdamW dual optimizer, WSD schedule, DCP checkpointing.")
-        ],
-        ("CONCEPTS", "Architecture & Concepts"): [
-            ("docs/concepts/model-architecture.html", "C1", "Model Architecture", "Line-by-line code walkthrough of model, GDN, MLA, MoE, MTP, and partial RoPE."),
-            ("docs/concepts/gdn-and-mla.html", "C2", "GDN & MLA Mechanisms", "Linear attention delta rule, latent KV compression, 3:1 hybrid stack thesis, and MoE-on-attention-only FFN split."),
-            ("docs/concepts/optimization.html", "C3", "Optimization Quartet", "NorMuon for 2D matrices, AdamW for 1D/embeddings/MoE, WSD decay, and FSDP-2 sharding."),
-            ("docs/concepts/kernels.html", "C4", "Operations & Triton", "Custom Triton GDN kernel: fused 1D selective scan with chunked recurrence (chunk=64)."),
-            ("docs/concepts/design.html", "C5", "v1.0 Design Spec", "The complete architectural specification, scaling decisions, and validation criteria.")
-        ],
-        ("GUIDES", "Guides & Playbooks"): [
-            ("docs/guides/quickstart.html", "G0", "Quickstart", "From zero to a running forward pass — install, smoke tests, gates, and training loop."),
-        ],
-        ("REFS", "API References"): [
-            ("docs/references/config.html", "R1", "Typed Config Reference", "Complete specification for ModelConfig, OptimizerConfig, SchedulerConfig, and validation."),
-            ("docs/references/api.html", "R2", "Public API Reference", "HyMo model interface, Trainer, optimizers, schedulers, and factory entry points.")
-        ]
-    }
-
-    portal_cards_html = ""
-    for (cat_tag, cat_title), items in categories.items():
-        cards = ""
-        for href, tag, title, desc in items:
-            cards += f"""
-            <a href="{href}" class="portal-card">
-                <span class="card-tag">{tag}</span>
+    # The index is the book's table of contents. It is derived from DOC_FILES
+    # so the sidebar and the index cannot disagree about the chapter list.
+    parts: dict[str, list[str]] = {}
+    chapter_no = 0
+    for rel_path, part, display_title, blurb in DOC_FILES:
+        chapter_no += 1
+        parts.setdefault(part, []).append(f"""
+            <a href="{rel_path.replace('.md', '.html')}" class="portal-card">
+                <span class="card-tag">Ch {chapter_no}</span>
                 <div class="card-body">
-                    <h3 class="card-heading">{title}</h3>
-                    <p class="card-desc">{desc}</p>
+                    <h3 class="card-heading">{display_title}</h3>
+                    <p class="card-desc">{blurb}</p>
                 </div>
             </a>
-            """
+            """)
+
+    portal_cards_html = ""
+    for part, cards in parts.items():
+        n = len(cards)
         portal_cards_html += f"""
         <section class="portal-section">
             <header class="portal-section-head">
-                <span class="portal-section-mark">§ {cat_tag.lower()}</span>
-                <h2 class="portal-section-title">{cat_title}</h2>
-                <span class="portal-section-meta">{len(items)} entries</span>
+                <span class="portal-section-mark">{n} {'chapter' if n == 1 else 'chapters'}</span>
+                <h2 class="portal-section-title">{part}</h2>
             </header>
-            <div class="portal-grid">{cards}</div>
+            <div class="portal-grid">{''.join(cards)}</div>
         </section>
         """
 
@@ -824,36 +1528,7 @@ def generate_index_portal():
         <main class="main-content">
             <div class="content-container">
                 <div class="hero-banner">
-                    <div class="hero-margin-ticks" aria-hidden="true"></div>
-
-                    <div class="hero-filed" aria-hidden="true">
-                        <span class="hero-filed-key">FILED</span>
-                        <span class="hero-filed-sep">&middot;</span>
-                        rev 1.0
-                        <span class="hero-filed-sep">&middot;</span>
-                        bf16
-                        <span class="hero-filed-sep">&middot;</span>
-                        30B tok target
-                        <span class="hero-filed-sep">&middot;</span>
-                        4&times; A100-80
-                    </div>
-
-                    <div class="hero-coords" aria-hidden="true">
-                        <span class="coord">FIG · A0</span>
-                        <span class="coord-sep">/</span>
-                        <span class="coord">PARAM 434M ACTIVE</span>
-                        <span class="coord-sep">/</span>
-                        <span class="coord">TOTAL 1.13B</span>
-                        <span class="coord-sep">/</span>
-                        <span class="coord">GDN 24+MLA 8 (3:1)</span>
-                        <span class="coord-sep">/</span>
-                        <span class="coord">MoE 16+1 TOP-2</span>
-                        <span class="coord-sep">/</span>
-                        <span class="coord">DEPTH 32</span>
-                        <span class="coord-sep">/</span>
-                        <span class="coord">MTP 2</span>
-                    </div>
-                    <h1 class="hero-title">Hy<span class="hero-title-em">Mo</span><span class="hero-title-em-accent">-434M</span><span class="hero-title sr-only" data-title="HYMO"> — documentation portal</span></h1>
+                    <h1 class="hero-title">HyMo<span class="sr-only" data-title="HYMO"> — documentation portal</span></h1>
                     <p class="hero-subtitle">A 434M-active / 1.13B-stored hybrid language model: Gated Delta Networks (linear attention) interleaved 3:1 with Multi-Head Latent Attention (full attention), routed through a 16+1 Asymmetric Mixture-of-Experts. Pure PyTorch &mdash; one hand-written Triton GDN recurrence kernel, a NorMuon &plus; AdamW dual optimizer, and a 30B-token training target.</p>
 
                     <div class="hymo-telemetry-ribbon" aria-label="Key HyMo Architectural Metrics">
@@ -966,7 +1641,7 @@ def generate_index_portal():
 
                     <div class="mechanism-section" aria-label="Interactive HyMo Core Mechanisms">
                         <div class="mechanism-section-head">
-                            <span class="mechanism-section-title">§ HYMO CORE MECHANISMS &middot; INTERACTIVE BENCHMARK LABS</span>
+                            <span class="mechanism-section-title">Core mechanisms, with live controls</span>
                         </div>
                         <div class="mechanism-grid">
                             <!-- Card 1: GDN Recurrence & Chunkwise Scan -->
@@ -1186,13 +1861,17 @@ def generate_assets():
 
 def main():
     print("Building HyMo HTML Documentation...")
+    # docs_html/ is a build artifact, so wipe it first. Otherwise a chapter
+    # dropped from DOC_FILES survives as a stale page and gets published.
+    if OUTPUT_DIR.exists():
+        shutil.rmtree(OUTPUT_DIR)
     OUTPUT_DIR.mkdir(parents=True, exist_ok=True)
 
     generate_assets()
 
-    for rel_path, category, display_title in DOC_FILES:
+    for rel_path, part, display_title, _blurb in DOC_FILES:
         print(f"Generating: {rel_path} -> docs_html/{rel_path.replace('.md', '.html')}")
-        generate_html_page(rel_path, category, display_title)
+        generate_html_page(rel_path, part, display_title)
 
     generate_index_portal()
     print("\nDocumentation build complete!")
